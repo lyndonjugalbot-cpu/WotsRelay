@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventEnvelope, Project, Session } from '@wots/protocol';
 import { api, bridge, type SessionView } from './api.ts';
-import { applyEvents, emptyTimeline, type Timeline } from './timeline.ts';
+import { applyEvents, emptyTimeline, type Timeline } from '@wots/timeline';
 import { RelayCore } from './components/RelayCore.tsx';
 import { Conversation } from './components/Conversation.tsx';
 import { Composer } from './components/Composer.tsx';

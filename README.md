@@ -80,6 +80,19 @@ pnpm --filter @wots/desktop start
 
 Closing the window does not stop work — the runner is a separate process. When launching from a VS Code terminal, unset `ELECTRON_RUN_AS_NODE` first.
 
+## iPhone app (development build)
+
+The companion lives in `apps/mobile` (Expo SDK 58, its own npm install, not part of the pnpm workspace).
+
+```bash
+cd apps/mobile && npm install
+npx expo run:ios            # builds and opens it in the iOS Simulator (Xcode required)
+```
+
+On the Mac: `wots gateway enable`, then `wots gateway pair`, and open the printed link on the phone (AirDrop, Messages or Notes), or paste it into the app. The phone trusts only your Mac's certificate (pinned from the link). Revoke it with `wots devices list` / `wots devices revoke <id>`.
+
+The app shows your sessions with usage bars, follows replies live, answers approvals, stops runs and continues paused work. A physical iPhone build needs your Apple signing setup; notifications are not built yet.
+
 ## How fallback works
 
 1. Claude runs in your project. Every event is saved to a local SQLite journal before it is shown.

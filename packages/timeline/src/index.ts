@@ -5,7 +5,7 @@ export type TimelineItem =
   | { kind: 'assistant'; id: string; connectionId: string | null; model: string | null; text: string; done: boolean; interrupted: boolean; ts: string }
   | { kind: 'handoff'; id: string; from: string; to: string; toModel: string; reason: string; simulated: boolean; ts: string }
   | { kind: 'tool'; id: string; name: string; preview: string; risk: RiskCategory; status: 'started' | 'completed' | 'failed' | 'unknown' | 'denied'; note: string | null; ts: string }
-  | { kind: 'approval'; id: string; action: string; scope: string; risk: RiskCategory; version: number; status: 'pending' | 'approve' | 'reject' | 'expired'; ts: string }
+  | { kind: 'approval'; id: string; action: string; scope: string; risk: RiskCategory; version: number; canApproveForSession: boolean; status: 'pending' | 'approve' | 'reject' | 'expired'; ts: string }
   | { kind: 'state'; id: string; state: RunState; reason: string | null; ts: string }
   | { kind: 'notice'; id: string; level: 'warn' | 'error' | 'info'; text: string; ts: string };
 
@@ -100,7 +100,7 @@ export function applyEvents(t: Timeline, events: EventEnvelope[]): Timeline {
       }
       case 'approval.requested': {
         const p = e.payload as EventPayload<'approval.requested'>;
-        upsert({ kind: 'approval', id: p.approvalId, action: p.action, scope: p.scope, risk: p.risk, version: p.version, status: 'pending', ts: e.ts });
+        upsert({ kind: 'approval', id: p.approvalId, action: p.action, scope: p.scope, risk: p.risk, version: p.version, canApproveForSession: p.canApproveForSession ?? false, status: 'pending', ts: e.ts });
         break;
       }
       case 'approval.resolved': {

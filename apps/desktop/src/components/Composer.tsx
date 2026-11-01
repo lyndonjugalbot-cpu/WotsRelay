@@ -1,6 +1,6 @@
 import { forwardRef, useState } from 'react';
 import type { Session } from '@wots/protocol';
-import type { Timeline } from '../timeline.ts';
+import type { Timeline } from '@wots/timeline';
 import { modelLabel } from '../labels.ts';
 
 interface Props {

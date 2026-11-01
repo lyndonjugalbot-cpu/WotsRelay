@@ -2,7 +2,7 @@
 
 - Product contract: `docs/research/` (blueprint), `docs/decisions/`, `docs/compatibility.md`. Keep `BUILD_STATUS.md` accurate after every milestone.
 - Node 26 runs `.ts` directly via type stripping. Use only erasable syntax: no enums, no namespaces, no constructor parameter properties. Relative imports keep the `.ts` extension.
-- Checks: `pnpm typecheck`, `pnpm test`. Desktop: `cd apps/desktop && npx tsc -p tsconfig.json --noEmit && pnpm build`.
+- Checks: `pnpm typecheck`, `pnpm test`. Desktop: `cd apps/desktop && npx tsc -p tsconfig.json --noEmit && pnpm build`. Mobile (own npm install in `apps/mobile`): `pnpm mobile:typecheck`; simulator build via `xcodebuild … -sdk iphonesimulator` (keep code signing on, or the Keychain is unavailable).
 - Never read provider credential files or keychains, never add `--dangerously-skip-permissions`, `--bare` or base-URL overrides to the Claude adapter, never treat model prose as a control signal.
 - Add a provider error mapping only with structured evidence (pinned schema or captured fixture). Unknown → pause.
 - Mock adapters must stay visibly labelled and are never eligible in real sessions.

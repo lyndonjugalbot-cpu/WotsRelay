@@ -1,5 +1,7 @@
 packages:
   - apps/*
+  # The Expo app keeps its own npm install: React Native tooling expects a flat node_modules.
+  - '!apps/mobile'
   - packages/*
   - packages/adapters/*
 # Only these dependencies may run install scripts (Electron downloads its binary; esbuild installs its native binary).

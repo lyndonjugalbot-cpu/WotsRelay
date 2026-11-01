@@ -17,6 +17,6 @@ The iPhone companion must follow and steer runner sessions from another device. 
 - Limits: 16 sockets, 1 MB frames, 4 KB pair bodies. A client that stops reading and buffers more than 8 MB is dropped; it recovers by replaying from its cursor. Pings every 30 s.
 
 ## Consequences
-- The phone app must pin the fingerprint (custom trust evaluation). A stock RN `WebSocket` with system trust will reject the cert, by design.
+- The phone app must pin the fingerprint (custom trust evaluation). A stock RN `WebSocket` with system trust will reject the cert, by design. Implemented in `apps/mobile/modules/wots-pinned` (Swift, `URLSession` delegate comparing the leaf certificate's SHA-256; system trust never used).
 - Reaching the Mac from outside the LAN needs the user's own VPN (e.g. Tailscale). There is no relay service.
 - Open items: certificate rotation command, QR rendering in the desktop app, push notifications for approvals.

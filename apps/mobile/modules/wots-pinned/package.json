@@ -1,0 +1,8 @@
+{
+  "name": "wots-pinned",
+  "version": "0.1.0",
+  "description": "HTTPS and WebSocket that trust only one pinned certificate (the paired Mac)",
+  "main": "index.ts",
+  "license": "UNLICENSED",
+  "private": true
+}
