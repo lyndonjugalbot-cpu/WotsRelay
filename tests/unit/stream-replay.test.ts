@@ -22,7 +22,7 @@ function replayExecutable(fixture: string): string {
 async function replay(
   make: (exe: string, sandbox: string) => ProviderAdapter,
   fixture: string,
-  opts: { model: string; code?: boolean; interruptOnDelta?: boolean; approval?: 'approve' | 'reject' },
+  opts: { model: string; code?: boolean; interruptOnDelta?: boolean; approval?: 'approve' | 'reject'; resume?: string },
 ): Promise<{ events: AdapterEventEnvelope[]; outcome: AttemptOutcome }> {
   const adapter = make(replayExecutable(fixture), tempDir('wsb-'));
   await adapter.probe();
@@ -33,7 +33,7 @@ async function replay(
     effort: 'medium',
     prompt: 'replayed prompt',
     permissionProfile: opts.code ? 'edit' : 'chat',
-    resumeProviderSessionId: null,
+    resumeProviderSessionId: opts.resume ?? null,
   });
   const events: AdapterEventEnvelope[] = [];
   let interrupted = false;
@@ -88,6 +88,22 @@ describe('captured Claude Code 2.1.316 streams', () => {
     expect(outcome).toMatchObject({ termination: 'interrupted', quiescent: true });
     expect(of(events, 'message.delta').length).toBeGreaterThan(0);
     expect(of(events, 'message.completed')).toEqual([]);
+  });
+});
+
+describe('captured second turns (conversation memory, live 2026-11-01)', () => {
+  it('Claude: --resume continues the same session and remembers the first turn', async () => {
+    const { events, outcome } = await replay(claude, 'claude-code-2.1.316/chat-resume.jsonl', { model: 'claude-opus-5-5', resume: '00000000-0000-4000-8000-000000000001' });
+    expect(outcome.termination).toBe('completed');
+    expect(of(events, 'session.bound')[0]!.providerSessionId).toBe('00000000-0000-4000-8000-000000000001');
+    expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['heron']);
+  });
+
+  it('Codex: thread/resume (not thread/start) continues the same thread', async () => {
+    const { events, outcome } = await replay(codex, 'codex-0.166.0/chat-resume.jsonl', { model: 'gpt-6-astra', resume: '00000000-0000-4000-8000-000000000001' });
+    expect(outcome.termination).toBe('completed');
+    expect(of(events, 'session.bound')[0]!.providerSessionId).toBe('00000000-0000-4000-8000-000000000001');
+    expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['falcon']);
   });
 });
 

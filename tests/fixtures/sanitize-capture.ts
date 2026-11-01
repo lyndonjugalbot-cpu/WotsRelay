@@ -25,6 +25,8 @@ try {
 
 const uuids = new Map<string, string>();
 const placeholderUuid = (u: string) => {
+  // Lines are scrubbed twice (parsed, then as part of the entry); placeholders stay as they are.
+  if (u.startsWith('00000000-0000-4000-8000-')) return u;
   if (!uuids.has(u.toLowerCase())) uuids.set(u.toLowerCase(), `00000000-0000-4000-8000-${String(uuids.size + 1).padStart(12, '0')}`);
   return uuids.get(u.toLowerCase())!;
 };
