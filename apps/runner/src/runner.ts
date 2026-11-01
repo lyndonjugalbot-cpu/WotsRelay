@@ -4,13 +4,14 @@ import {
   CreateSessionParams,
   FallbackConfig,
   RegisterProjectParams,
+  RouteRef,
   SendMessageParams,
   SubscribeParams,
   type EventEnvelope,
   type EventPayload,
   type ModelCapability,
 } from '@wots/protocol';
-import type { ProviderAdapter } from '@wots/core';
+import { promoteRoute, type ProviderAdapter } from '@wots/core';
 import { Store } from '@wots/storage';
 import { WorkspaceLeases, canonicalRoot, gitBaseline } from '@wots/workspace';
 import { MockAdapter, SCENARIOS } from '@wots/adapter-mock';
@@ -110,6 +111,15 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
       return relay.createSession({ projectId: params.projectId, title: params.title, mode: params.mode });
     },
     'sessions.list': () => store.listSessions(200),
+    // /model: put the chosen model first for this session; the next run uses it.
+    'sessions.setRoute': (p) => {
+      const { sessionId, route } = z.object({ sessionId: z.string(), route: RouteRef }).parse(p);
+      const s = store.getSession(sessionId);
+      if (!s) throw new RelayError('not_found', 'Unknown session');
+      const adapter = relay.adapter(route.connectionId);
+      if (!adapter || adapter.isMock !== (s.mode === 'mock')) throw new RelayError('invalid_params', `${route.connectionId} cannot serve a ${s.mode} session`);
+      return store.updateSession(sessionId, { fallback: { ...s.fallback, routes: promoteRoute(s.fallback.routes, route) } });
+    },
     'sessions.get': (p) => sessionView(z.object({ sessionId: z.string() }).parse(p).sessionId),
     'messages.send': (p) => relay.sendMessage(SendMessageParams.parse(p)),
     'runs.interrupt': (p) => relay.interrupt(z.object({ runId: z.string() }).parse(p).runId),
@@ -133,6 +143,14 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
     'events.unsubscribe': (p, conn) => {
       conn.subscriptions.delete(z.object({ sessionId: z.string() }).parse(p).sessionId);
       return { ok: true };
+    },
+    // Latest provider-reported usage windows and the switch threshold (spec: switch at 95%).
+    'usage.get': () => {
+      const cfg = store.getSetting<{ switchAtPercent?: number } | null>('fallback', null);
+      return {
+        switchAtPercent: cfg?.switchAtPercent ?? 95,
+        connections: Object.fromEntries(relay.listAdapters().map((a) => [a.connectionId, relay.usageWindows(a.connectionId).map((w) => ({ scope: w.scope, percent: w.percent, resetAt: w.resetAt ? new Date(w.resetAt).toISOString() : null }))])),
+      };
     },
     'fallback.get': () => ({ real: store.getSetting('fallback', null) ?? defaultFallback(), chatConsent: store.getSetting('chat.crossProviderConsent', false) }),
     'fallback.set': (p) => {
@@ -185,6 +203,7 @@ function defaultFallback() {
     autoFallback: true,
     outageFallback: false,
     allowApiBilling: false,
+    switchAtPercent: 95,
   };
 }
 

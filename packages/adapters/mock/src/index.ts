@@ -23,7 +23,9 @@ export type MockStep =
   | { kind: 'malformed' }
   | { kind: 'duplicateLast' }
   | { kind: 'hang' }
-  | { kind: 'effectiveModel'; model: string; note: string };
+  | { kind: 'effectiveModel'; model: string; note: string }
+  // A provider-reported usage window, like Claude's rate_limit_event or Codex's rateLimits.
+  | { kind: 'usage'; scope: string; percent: number; resetInMs: number };
 
 export type MockScript = (input: AttemptInput, attemptNumber: number) => MockStep[];
 
@@ -45,6 +47,7 @@ export class MockAdapter implements ProviderAdapter {
   readonly connectionId: string;
   private attempts = 0;
   readonly prompts: string[] = [];
+  readonly inputs: AttemptInput[] = [];
 
   private readonly opts: MockAdapterOptions;
 
@@ -93,12 +96,14 @@ export class MockAdapter implements ProviderAdapter {
   startAttempt(input: AttemptInput): AttemptHandle {
     this.attempts++;
     this.prompts.push(input.prompt);
+    this.inputs.push(input);
     const steps = this.opts.script(input, this.attempts);
     const channel = new EventChannel<AdapterEventEnvelope>();
     let interrupted = false;
     let wake: (() => void) | null = null;
     const approvals = new Map<string, (d: 'approve' | 'reject') => void>();
-    const providerSessionId = `mock-session-${input.attemptId}`;
+    // Resuming keeps the provider's session id, as Claude Code --resume and Codex thread/resume do.
+    const providerSessionId = input.resumeProviderSessionId ?? `mock-session-${input.attemptId}`;
     let counter = 0;
     let last: AdapterEventEnvelope | null = null;
     const emit = (e: AdapterEventEnvelope) => {
@@ -123,6 +128,9 @@ export class MockAdapter implements ProviderAdapter {
         if (interrupted) return this.end(channel, 'interrupted', null, providerSessionId);
         await Promise.resolve();
         switch (step.kind) {
+          case 'usage':
+            emit({ type: 'usage.observed', observation: { provider: this.provider, scope: step.scope, source: 'mock', observedAt: new Date().toISOString(), resetAt: new Date(Date.now() + step.resetInMs).toISOString(), value: step.percent, unit: 'percent', confidence: 'reported' } });
+            break;
           case 'text': {
             const key = `m${++msgN}`;
             for (const chunk of step.text.match(/.{1,24}/gs) ?? []) emit({ type: 'message.delta', messageKey: key, text: chunk });
@@ -194,7 +202,7 @@ export class MockAdapter implements ProviderAdapter {
         wake?.();
       },
       answerApproval: async (id, d) => {
-        approvals.get(id)?.(d);
+        approvals.get(id)?.(d === 'reject' ? 'reject' : 'approve');
         approvals.delete(id);
       },
     };
@@ -242,6 +250,11 @@ export const TASK_FILES = [
 ];
 
 export const SCENARIOS: Record<string, { primary: MockScript; secondary: MockScript; description: string }> = {
+  'near-limit': {
+    description: 'Primary answers but reports 96% of its 5-hour window; the next message should move',
+    primary: () => [{ kind: 'usage', scope: 'five_hour', percent: 96, resetInMs: 3600_000 }, { kind: 'text', text: 'Hello from the primary.' }],
+    secondary: () => [{ kind: 'text', text: 'Hello from the fallback, with the conversation so far.' }],
+  },
   success: {
     description: 'Primary completes the task',
     primary: () => [{ kind: 'text', text: 'Building the settings page.' }, { kind: 'writeRemaining', files: TASK_FILES }, { kind: 'text', text: 'Done.' }],

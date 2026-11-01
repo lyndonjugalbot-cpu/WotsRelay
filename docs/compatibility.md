@@ -31,6 +31,8 @@ No credential file, keychain entry or token was read. Only the documented status
 - Stream parsing: **live + fixtures** (2.1.316, 2026-11-01). Captured streams in `tests/fixtures/streams/claude-code-2.1.316/` (chat success, coding turn, interrupt) are replayed through the adapter in tests. `system/api_retry` and `permission_denied` are still docs-based.
 - Stream start: with `--setting-sources user`, the owner's user-level hooks run (`system/hook_started`/`hook_response` lines before `init`), and `init` lists their plugins and skills.
 - Interrupt (SIGINT): **live**. Claude Code still flushes the partial text as a final `assistant` message (`stop_reason: null`, same as a normal message), then `result` `subtype: error_during_execution`, `terminal_reason: aborted_streaming`, exit 0. The adapter drops `message.completed` after its own SIGINT, so the partial is recorded as `message.interrupted`.
+- Usage: `rate_limit_event` → `rate_limit_info.unifiedWindows.{five_hour,seven_day}.{utilization,resetsAt,status}` — **live fixture** (5-hour at 0.99, `allowed_warning`). Mapped to `usage.observed`; drives the 95% switch (ADR 0005). Whether it is sent at low usage is unknown.
+- Conversation continuity via `--resume <session_id>`: flag in `--help`; **untested live**.
 - In the `edit` profile (`acceptEdits`), Claude created a file with `Bash` (`mkdir -p … && printf … > file`) without a prompt, rather than with `Write`.
 - Process killed mid-turn (SIGTERM from outside): **live**. Classified `transport` → `paused_uncertain` with manual fallback offered; the completed `Write` stayed journalled.
 
@@ -40,6 +42,9 @@ No credential file, keychain entry or token was read. Only the documented status
 - **Live:** `initialize` → `initialized` → `account/read` → `model/list` over stdio JSONL (no `jsonrpc` field required).
 - **Live + fixtures** (2026-11-01, `tests/fixtures/streams/codex-0.166.0/`): `thread/start`, `turn/start`, agent message streaming, `commandExecution` and `fileChange` items, `account/rateLimits/updated` (recorded as `usage.observed`), `turn/interrupt` (→ `message.interrupted`), and a command approval request answered with reject (→ `tool.denied`; the turn completed). No quarantined lines.
 - With the `edit` profile (`workspace-write` sandbox, `on-request` approvals), Codex ran read-only shell commands **without asking**. That matches the configured policy, but the adapter labels every shell command with risk `unknown`, because it doesn't classify commands.
+- Both rate-limit windows (`primary` 300 min → `five_hour`, `secondary` 10080 min → `seven_day`) are mapped — **live fixture**.
+- `thread/resume` (for later turns) and `acceptForSession` (approve for this session, command approvals only): **schema only, untested live**.
+- Shell command risk is now classified (shared classifier for both providers) instead of always `unknown`.
 - **Untested live:** approve (only reject was captured).
 - Limit signals: structured `codexErrorInfo`. `usageLimitExceeded` = confirmed limit (auto-fallback); `rateLimitExceeded` = transient throttle; `sessionBudgetExceeded` = suspected; others mapped in `classifyCodexError`. Unknown values pause.
 - Version policy: adapter runs only on `0.166.x`; other versions report "regenerate schema and re-run fixtures".

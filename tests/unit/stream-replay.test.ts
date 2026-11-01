@@ -63,6 +63,11 @@ describe('captured Claude Code 2.1.316 streams', () => {
     expect(of(events, 'session.bound')).toHaveLength(1);
     expect(of(events, 'model.effective')[0]).toMatchObject({ model: 'claude-opus-5-5' });
     expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['pong']);
+    // Real reading at capture time: the 5-hour window was 99% used.
+    expect(of(events, 'usage.observed').map((e) => [e.observation.scope, e.observation.value])).toEqual([
+      ['five_hour', 99],
+      ['seven_day', 14],
+    ]);
     noProblems(events);
   });
 
@@ -92,7 +97,7 @@ describe('captured Codex 0.166.0 app-server streams', () => {
     expect(outcome).toMatchObject({ termination: 'completed', failure: null });
     expect(of(events, 'model.effective')[0]).toMatchObject({ model: 'gpt-6-astra', effort: 'medium' });
     expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['pong']);
-    expect(of(events, 'usage.observed').length).toBeGreaterThan(0);
+    expect([...new Set(of(events, 'usage.observed').map((e) => e.observation.scope))].sort()).toEqual(['five_hour', 'seven_day']);
     noProblems(events);
   });
 
@@ -117,7 +122,8 @@ describe('captured Codex 0.166.0 app-server streams', () => {
     expect(outcome.termination).toBe('completed');
     const req = of(events, 'approval.requested');
     expect(req).toHaveLength(1);
-    expect(req[0]!.action).toContain('curl');
+    expect(req[0]!.action).toMatch(/^Run: curl /);
+    expect(req[0]).toMatchObject({ risk: 'external-side-effect', canApproveForSession: true });
     expect(of(events, 'tool.denied').length).toBeGreaterThan(0);
   });
 });

@@ -106,7 +106,7 @@ export function applyEvents(t: Timeline, events: EventEnvelope[]): Timeline {
       case 'approval.resolved': {
         const p = e.payload as EventPayload<'approval.resolved'>;
         const cur = get('approval', p.approvalId);
-        if (cur) upsert({ ...cur, status: p.decision, version: p.version });
+        if (cur) upsert({ ...cur, status: p.decision === 'reject' ? 'reject' : 'approve', version: p.version });
         break;
       }
       case 'checkpoint.created': {

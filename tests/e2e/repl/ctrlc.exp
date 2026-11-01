@@ -1,0 +1,12 @@
+source [file join [file dirname [info script]] common.tcl]
+spawn -noecho $wots --mock $scenario
+step "Enter to choose" trust; send "2"
+prompt run; send "Long task please\r"
+step "Working" started; sleep 0.3; send "\003"
+step "cancelled" cancelled
+prompt help; send "/help\r"
+step "Ctrl-C stops a reply in progress" help
+prompt ctrlc; send "\003"
+step "press Ctrl-C again" hint; send "\003"
+step "bye" exit
+expect eof

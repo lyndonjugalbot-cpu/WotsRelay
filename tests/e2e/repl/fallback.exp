@@ -1,0 +1,22 @@
+source [file join [file dirname [info script]] common.tcl]
+spawn -noecho $wots --mock $scenario
+step "Enter to choose" trust; send "\r"
+prompt model; send "/model\r"
+step "Select a model" picker; send "\033\[B"; sleep 0.2; send "\r"
+step "Using .*gpt-6-astra" model-picked
+prompt status; send "/status\r"
+step "session ses_" status
+prompt model-direct; send "/model claude-opus-5-5\r"
+step "Using .*claude-opus-5-5" model-direct
+prompt task; send "Build the settings page.\r"
+step "What next\\?" pause-menu; send "\r"
+step "to continue\\?" consent; send "\r"
+step "completed" completion
+prompt new; send "/new\r"
+step "New conversation" new
+prompt resume; send "/resume\r"
+step "Resume a conversation" resume-picker; send "\r"
+step "Resumed" resumed
+prompt exit; send "/exit\r"
+step "bye" exit
+expect eof

@@ -174,7 +174,7 @@ describe('vertical slice: Claude → Astra fallback (mock adapters)', () => {
 
   it('real sessions never use mock routes', async () => {
     const h = harness('success');
-    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { routes: [{ connectionId: 'mock-claude', modelId: 'claude-opus-5-5' }], effort: 'medium', speed: 'standard', autoFallback: true, outageFallback: false, allowApiBilling: false } });
+    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { routes: [{ connectionId: 'mock-claude', modelId: 'claude-opus-5-5' }], effort: 'medium', speed: 'standard', autoFallback: true, outageFallback: false, allowApiBilling: false, switchAtPercent: 95 } });
     const { runId } = h.relay.sendMessage({ sessionId: s.id, text: 'go', idempotencyKey: 'k-real-mock-1' });
     const run = await h.relay.waitForRun(runId);
     expect(run.state).toBe('paused_auth');
