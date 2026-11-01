@@ -1,0 +1,17 @@
+{
+  "name": "@wots/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wots": "./bin/wots"
+  },
+  "dependencies": {
+    "@wots/protocol": "workspace:*",
+    "@wots/runner": "workspace:*",
+    "commander": "15.0.0",
+    "@wots/adapter-claude-code": "workspace:*",
+    "@wots/adapter-codex": "workspace:*",
+    "@wots/security": "workspace:*"
+  }
+}

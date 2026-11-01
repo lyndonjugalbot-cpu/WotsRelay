@@ -1,0 +1,39 @@
+{
+  "name": "wots-relay",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json",
+    "wots": "node apps/cli/src/main.ts",
+    "runner": "node apps/runner/src/main.ts",
+    "desktop:dev": "pnpm --filter @wots/desktop dev",
+    "desktop:build": "pnpm --filter @wots/desktop build",
+    "typecheck:desktop": "tsc -p apps/desktop/tsconfig.json --noEmit",
+    "check": "pnpm typecheck && pnpm typecheck:desktop && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/ws": "8.18.2",
+    "@wots/adapter-claude-code": "workspace:*",
+    "@wots/adapter-codex": "workspace:*",
+    "@wots/adapter-mock": "workspace:*",
+    "@wots/cli": "workspace:*",
+    "@wots/context": "workspace:*",
+    "@wots/core": "workspace:*",
+    "@wots/protocol": "workspace:*",
+    "@wots/runner": "workspace:*",
+    "@wots/security": "workspace:*",
+    "@wots/storage": "workspace:*",
+    "@wots/workspace": "workspace:*",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  }
+}

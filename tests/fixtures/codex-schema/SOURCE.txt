@@ -1,0 +1,1 @@
+codex-cli 0.166.0 — generated 2026-10-31T20:51:29Z with: codex app-server generate-json-schema --out <dir>

@@ -1,0 +1,29 @@
+{
+  "name": "@wots/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts"
+  },
+  "bin": {
+    "wots-runner": "./src/main.ts"
+  },
+  "dependencies": {
+    "@wots/adapter-claude-code": "workspace:*",
+    "@wots/adapter-codex": "workspace:*",
+    "@wots/adapter-mock": "workspace:*",
+    "@wots/context": "workspace:*",
+    "@wots/core": "workspace:*",
+    "@wots/protocol": "workspace:*",
+    "@wots/security": "workspace:*",
+    "@wots/storage": "workspace:*",
+    "@wots/workspace": "workspace:*",
+    "ws": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
+  }
+}

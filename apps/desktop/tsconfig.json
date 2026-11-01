@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "jsx": "react-jsx", "lib": ["esnext", "dom", "dom.iterable"], "types": ["node"], "module": "esnext", "moduleResolution": "bundler" },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "electron/**/*.ts"]
+}
