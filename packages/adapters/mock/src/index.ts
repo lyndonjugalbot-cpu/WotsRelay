@@ -9,7 +9,7 @@ import {
   type ProbeResult,
   type ProviderAdapter,
 } from '@wots/core';
-import type { Connection, Failure, ModelCapability, RiskCategory } from '@wots/protocol';
+import type { Connection, Failure, ModelCapability, ProviderCapabilities, RiskCategory } from '@wots/protocol';
 
 export type MockStep =
   | { kind: 'text'; text: string }
@@ -54,6 +54,10 @@ export class MockAdapter implements ProviderAdapter {
   constructor(opts: MockAdapterOptions) {
     this.opts = opts;
     this.connectionId = opts.connectionId;
+  }
+
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, nativeResume: true, approvals: 'bridged', edits: 'apply', usage: 'percent', models: 'fixed' };
   }
 
   async probe(): Promise<ProbeResult> {

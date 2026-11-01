@@ -46,6 +46,10 @@ export const DEFAULT_FALLBACK: FallbackConfig = {
   outageFallback: false,
   allowApiBilling: false,
   switchAtPercent: 95,
+  disabledConnections: [],
+  attemptTimeoutMs: 3_600_000,
+  transportRetries: 2,
+  notifyOnSwitch: true,
 };
 
 export const MOCK_FALLBACK: FallbackConfig = {
@@ -799,6 +803,11 @@ export class RelayController {
         .map((a) => ({ operationId: a.operationId, name: a.name, argsPreview: a.argsPreview, risk: a.risk, status: a.status })),
       permissionVersion: project?.permissionVersion ?? 0,
       switchReason: reason,
+      nextRoute: null,
+      handoffCategory: null,
+      gitStatus: [],
+      knownErrors: [],
+      permissionProfile: null,
       previousProvider: attempt ? { connectionId: attempt.connectionId, model: attempt.effectiveModel ?? attempt.requestedModel } : null,
       createdAtSeq: this.store.latestSeq(session.id),
       createdAt: new Date().toISOString(),

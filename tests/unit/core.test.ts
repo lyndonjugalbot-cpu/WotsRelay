@@ -13,6 +13,10 @@ const cfg: FallbackConfig = {
   outageFallback: false,
   allowApiBilling: false,
   switchAtPercent: 95,
+  disabledConnections: [],
+  attemptTimeoutMs: 3_600_000,
+  transportRetries: 2,
+  notifyOnSwitch: true,
 };
 const f = (kind: Failure['kind'], extra: Partial<Failure> = {}): Failure => ({ kind, message: kind, evidence: 'test', retryAfterMs: null, resetAt: null, scope: null, simulated: true, ...extra });
 const ctx = { config: cfg, throttleRetries: 0, contextRetries: 0, random: () => 0.5 };

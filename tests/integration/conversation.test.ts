@@ -86,7 +86,7 @@ describe('near-limit route policy', () => {
     isMock: false,
     usage: usagePct === undefined ? [] : [{ scope: 'five_hour', percent: usagePct, resetAt }],
   });
-  const config = (switchAtPercent?: number) => ({ routes: [{ connectionId: 'a', modelId: 'a-model' }, { connectionId: 'b', modelId: 'b-model' }], effort: 'medium' as const, speed: 'standard' as const, autoFallback: true, outageFallback: false, allowApiBilling: false, switchAtPercent: switchAtPercent as number });
+  const config = (switchAtPercent?: number) => ({ routes: [{ connectionId: 'a', modelId: 'a-model' }, { connectionId: 'b', modelId: 'b-model' }], effort: 'medium' as const, speed: 'standard' as const, autoFallback: true, outageFallback: false, allowApiBilling: false, switchAtPercent: switchAtPercent as number, disabledConnections: [], attemptTimeoutMs: 3_600_000, transportRetries: 2, notifyOnSwitch: true });
   const pick = (cands: RouteCandidate[], switchAt?: number) => selectNextRoute({ config: config(switchAt), candidates: cands, tried: new Set(), crossProviderConsent: true, currentConnectionId: null, now: Date.now(), allowMock: false });
 
   it('switches at the threshold, not below it; the threshold is configurable', () => {

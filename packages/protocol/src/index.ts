@@ -8,10 +8,10 @@ export const PROTOCOL_VERSION = 1;
 export const Id = z.string().min(1).max(128);
 export const IsoTime = z.string().datetime();
 
-export const Provider = z.enum(['anthropic', 'openai', 'mock']);
+export const Provider = z.enum(['anthropic', 'openai', 'cursor', 'google', 'mock']);
 export type Provider = z.infer<typeof Provider>;
 
-export const AdapterKind = z.enum(['claude-code-cli', 'codex-app-server', 'mock']);
+export const AdapterKind = z.enum(['claude-code-cli', 'codex-app-server', 'cursor-cli', 'gemini-api', 'mock']);
 export type AdapterKind = z.infer<typeof AdapterKind>;
 
 export const BillingMode = z.enum(['subscription', 'api', 'unknown']);
@@ -110,6 +110,13 @@ export const FallbackConfig = z.object({
   allowApiBilling: z.boolean(),
   // Prefer the next route once a provider reports this share of a usage window as used.
   switchAtPercent: z.number().int().min(50).max(100).default(95),
+  // Connections the user has switched off; their routes stay listed but are skipped.
+  disabledConnections: z.array(z.string()).default([]),
+  // An attempt running longer than this is stopped like an interrupt (default one hour).
+  attemptTimeoutMs: z.number().int().positive().default(3_600_000),
+  // Retries on the same route after a lost connection before pausing.
+  transportRetries: z.number().int().min(0).max(5).default(2),
+  notifyOnSwitch: z.boolean().default(true),
 });
 export type FallbackConfig = z.infer<typeof FallbackConfig>;
 
@@ -200,11 +207,38 @@ export const FailureKind = z.enum([
   'permission_denied',
   'policy_refusal',
   'transport',
+  'timeout', // the attempt exceeded attemptTimeoutMs
   'billing_route_conflict',
   'unsupported_version',
   'unknown',
 ]);
 export type FailureKind = z.infer<typeof FailureKind>;
+
+// Display categories for provider errors; FailureKind stays the stored, finer-grained value.
+export const ProviderErrorCategory = z.enum([
+  'RATE_LIMIT',
+  'QUOTA_EXCEEDED',
+  'AUTH_EXPIRED',
+  'PROVIDER_UNAVAILABLE',
+  'NETWORK_ERROR',
+  'TIMEOUT',
+  'PERMISSION_DENIED',
+  'EXECUTION_ERROR',
+  'USER_CANCELLED',
+  'UNKNOWN',
+]);
+export type ProviderErrorCategory = z.infer<typeof ProviderErrorCategory>;
+
+// What an adapter can really do, so unsupported features are reported rather than simulated.
+export const ProviderCapabilities = z.object({
+  streaming: z.boolean(),
+  nativeResume: z.boolean(),
+  approvals: z.enum(['bridged', 'none']),
+  edits: z.enum(['apply', 'proposals-only', 'none']),
+  usage: z.enum(['percent', 'tokens', 'none']),
+  models: z.enum(['listed', 'catalog', 'fixed']),
+});
+export type ProviderCapabilities = z.infer<typeof ProviderCapabilities>;
 
 export const Failure = z.object({
   kind: FailureKind,
@@ -249,6 +283,11 @@ export const Checkpoint = z.object({
   permissionVersion: z.number().int(),
   switchReason: z.string().nullable(),
   previousProvider: z.object({ connectionId: z.string(), model: z.string() }).nullable(),
+  nextRoute: RouteRef.nullable().default(null),
+  handoffCategory: ProviderErrorCategory.nullable().default(null),
+  gitStatus: z.array(z.string()).default([]),
+  knownErrors: z.array(z.string()).default([]),
+  permissionProfile: PermissionProfile.nullable().default(null),
   createdAtSeq: z.number().int(),
   contentHash: z.string(),
   createdAt: IsoTime,

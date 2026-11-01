@@ -152,7 +152,7 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
         connections: Object.fromEntries(relay.listAdapters().map((a) => [a.connectionId, relay.usageWindows(a.connectionId).map((w) => ({ scope: w.scope, percent: w.percent, resetAt: w.resetAt ? new Date(w.resetAt).toISOString() : null }))])),
       };
     },
-    'fallback.get': () => ({ real: store.getSetting('fallback', null) ?? defaultFallback(), chatConsent: store.getSetting('chat.crossProviderConsent', false) }),
+    'fallback.get': () => ({ real: loadFallback(store), chatConsent: store.getSetting('chat.crossProviderConsent', false) }),
     'fallback.set': (p) => {
       const cfg = FallbackConfig.parse(p);
       if (cfg.routes.some((r) => relay.adapter(r.connectionId)?.isMock)) throw new RelayError('invalid_params', 'Mock routes cannot be part of the real fallback order');
@@ -192,6 +192,12 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
   return { paths, relay, server, gateway, stop };
 }
 
+// The stored real-session fallback, parsed so older saved configs gain new defaults. It never
+// adds or reorders routes; new providers join only when the user enables them.
+export function loadFallback(store: Pick<Store, 'getSetting'>): FallbackConfig {
+  return FallbackConfig.parse(store.getSetting('fallback', null) ?? defaultFallback());
+}
+
 function defaultFallback() {
   return {
     routes: [
@@ -204,6 +210,10 @@ function defaultFallback() {
     outageFallback: false,
     allowApiBilling: false,
     switchAtPercent: 95,
+    disabledConnections: [],
+    attemptTimeoutMs: 3_600_000,
+    transportRetries: 2,
+    notifyOnSwitch: true,
   };
 }
 

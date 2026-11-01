@@ -1,4 +1,4 @@
-import type { Failure, FallbackConfig, RouteRef, RunState } from '@wots/protocol';
+import type { Failure, FailureKind, FallbackConfig, ProviderErrorCategory, RouteRef, RunState } from '@wots/protocol';
 
 export const MAX_THROTTLE_RETRIES = 2;
 export const MAX_CONTEXT_RETRIES = 1;
@@ -9,6 +9,36 @@ export type FailureDecision =
   | { action: 'retry_compacted'; reason: string }
   | { action: 'pause'; state: Extract<RunState, 'paused_limits' | 'paused_auth' | 'paused_uncertain'>; reason: string; offerManualFallback: boolean }
   | { action: 'fail'; reason: string };
+
+// Pure display mapping from the stored failure kind to the spec's category. Exhaustive: a new
+// FailureKind fails typecheck here until it is placed.
+export function categoryOf(kind: FailureKind): ProviderErrorCategory {
+  switch (kind) {
+    case 'transient_throttle':
+      return 'RATE_LIMIT';
+    case 'usage_limit':
+    case 'usage_limit_suspected':
+      return 'QUOTA_EXCEEDED';
+    case 'auth':
+      return 'AUTH_EXPIRED';
+    case 'outage':
+    case 'model_unavailable':
+      return 'PROVIDER_UNAVAILABLE';
+    case 'transport':
+      return 'NETWORK_ERROR';
+    case 'timeout':
+      return 'TIMEOUT';
+    case 'permission_denied':
+    case 'policy_refusal':
+      return 'PERMISSION_DENIED';
+    case 'context_too_large':
+    case 'billing_route_conflict':
+    case 'unsupported_version':
+      return 'EXECUTION_ERROR';
+    case 'unknown':
+      return 'UNKNOWN';
+  }
+}
 
 export interface DecisionContext {
   config: FallbackConfig;
@@ -61,6 +91,8 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
       return { action: 'fail', reason: `${failure.kind === 'permission_denied' ? 'Permission denied' : 'Policy refusal'}: ${failure.message}` };
     case 'transport':
       return { action: 'pause', state: 'paused_uncertain', reason: `Connection to provider lost: ${failure.message}`, offerManualFallback: true };
+    case 'timeout':
+      return { action: 'pause', state: 'paused_uncertain', reason: `The attempt timed out: ${failure.message}`, offerManualFallback: true };
     case 'unsupported_version':
       return { action: 'fail', reason: failure.message };
     case 'unknown':

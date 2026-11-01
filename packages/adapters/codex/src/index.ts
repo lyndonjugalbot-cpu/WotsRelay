@@ -19,7 +19,7 @@ import {
   type ProbeResult,
   type ProviderAdapter,
 } from '@wots/core';
-import type { ApprovalDecision, Connection, Failure, FailureKind, ModelCapability, PermissionProfile } from '@wots/protocol';
+import type { ApprovalDecision, Connection, Failure, FailureKind, ModelCapability, PermissionProfile, ProviderCapabilities } from '@wots/protocol';
 import { detectBillingEnv, redact } from '@wots/security';
 
 export const ADAPTER_VERSION = '0.1.0';
@@ -188,6 +188,10 @@ export class CodexAdapter implements ProviderAdapter {
     this.connectionId = opts.connectionId ?? 'codex';
     this.env = opts.env ?? process.env;
     this.exe = opts.executable === undefined ? resolveExecutable('codex', this.env) : opts.executable;
+  }
+
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, nativeResume: true, approvals: 'bridged', edits: 'apply', usage: 'percent', models: 'listed' };
   }
 
   async probe(): Promise<ProbeResult> {

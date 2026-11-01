@@ -19,7 +19,7 @@ import {
   type ProbeResult,
   type ProviderAdapter,
 } from '@wots/core';
-import type { Connection, Failure, ModelCapability, PermissionProfile, RiskCategory } from '@wots/protocol';
+import type { Connection, Failure, ModelCapability, ProviderCapabilities, PermissionProfile, RiskCategory } from '@wots/protocol';
 import { detectBillingEnv, redact } from '@wots/security';
 
 export const ADAPTER_VERSION = '0.1.0';
@@ -235,6 +235,10 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
     this.connectionId = opts.connectionId ?? 'claude-code';
     this.env = opts.env ?? process.env;
     this.exe = opts.executable === undefined ? resolveExecutable('claude', this.env) : opts.executable;
+  }
+
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, nativeResume: true, approvals: 'none', edits: 'apply', usage: 'percent', models: 'fixed' };
   }
 
   async probe(): Promise<ProbeResult> {

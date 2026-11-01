@@ -4,6 +4,7 @@ import type {
   Effort,
   Failure,
   ModelCapability,
+  ProviderCapabilities,
   PermissionProfile,
   Provider,
   RiskCategory,
@@ -83,6 +84,7 @@ export interface ProviderAdapter {
   probe(): Promise<ProbeResult>;
   getConnectionStatus(): Promise<Connection>;
   listModels(): Promise<ModelCapability[]>;
+  capabilities(): ProviderCapabilities;
   startAttempt(input: AttemptInput): AttemptHandle;
   dispose(): Promise<void>;
 }
