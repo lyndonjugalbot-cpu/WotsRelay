@@ -40,10 +40,16 @@ export function categoryOf(kind: FailureKind): ProviderErrorCategory {
   }
 }
 
+export const DEFAULT_TRANSPORT_RETRIES = 2;
+
 export interface DecisionContext {
   config: FallbackConfig;
   throttleRetries: number;
   contextRetries: number;
+  // Same-route retries already spent on lost connections in this cycle.
+  transportRetries?: number;
+  // The failed attempt left tool calls without a recorded result; a blind retry could repeat them.
+  unresolvedTools?: boolean;
   // Deterministic jitter source so tests can use a fake clock / RNG.
   random: () => number;
 }
@@ -67,9 +73,7 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
       if (ctx.throttleRetries >= MAX_THROTTLE_RETRIES) {
         return { action: 'pause', state: 'paused_limits', reason: 'Provider is throttling; retries exhausted', offerManualFallback: true };
       }
-      const base = failure.retryAfterMs ?? 2000 * 2 ** ctx.throttleRetries;
-      const jitter = Math.floor(base * 0.25 * ctx.random());
-      return { action: 'retry_same', delayMs: Math.min(base + jitter, 60_000), reason: 'Short throttle; retrying' };
+      return { action: 'retry_same', delayMs: throttleDelay(ctx.throttleRetries, failure.retryAfterMs, ctx.random), reason: 'Short throttle; retrying' };
     }
     case 'outage':
       return ctx.config.outageFallback
@@ -89,8 +93,13 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
     case 'policy_refusal':
       // Never switch providers to get around a boundary.
       return { action: 'fail', reason: `${failure.kind === 'permission_denied' ? 'Permission denied' : 'Policy refusal'}: ${failure.message}` };
-    case 'transport':
+    case 'transport': {
+      const used = ctx.transportRetries ?? 0;
+      if (!ctx.unresolvedTools && used < (ctx.config.transportRetries ?? DEFAULT_TRANSPORT_RETRIES)) {
+        return { action: 'retry_same', delayMs: throttleDelay(used, null, ctx.random), reason: 'Connection to provider lost; retrying the same route' };
+      }
       return { action: 'pause', state: 'paused_uncertain', reason: `Connection to provider lost: ${failure.message}`, offerManualFallback: true };
+    }
     case 'timeout':
       return { action: 'pause', state: 'paused_uncertain', reason: `The attempt timed out: ${failure.message}`, offerManualFallback: true };
     case 'unsupported_version':
@@ -99,6 +108,13 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
     default:
       return { action: 'pause', state: 'paused_uncertain', reason: `Unclassified error: ${failure.message}`, offerManualFallback: false };
   }
+}
+
+// Exponential backoff with up to 25% jitter, capped at a minute. A provider's own retry-after wins.
+export function throttleDelay(retries: number, retryAfterMs: number | null, random: () => number): number {
+  const base = retryAfterMs ?? 2000 * 2 ** retries;
+  const jitter = Math.floor(base * 0.25 * random());
+  return Math.min(base + jitter, 60_000);
 }
 
 export interface RouteCandidate {
@@ -161,8 +177,13 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
   const reasons: string[] = [];
   const threshold = input.config.switchAtPercent ?? DEFAULT_SWITCH_AT_PERCENT;
   const nearlyFull: Array<{ route: RouteRef; window: UsageWindow }> = [];
+  const disabled = new Set(input.config.disabledConnections ?? []);
   for (const route of input.config.routes) {
     const key = routeKey(route);
+    if (disabled.has(route.connectionId)) {
+      reasons.push(`${route.connectionId}: disabled by user`);
+      continue;
+    }
     if (input.tried.has(key)) {
       reasons.push(`${key}: already tried this cycle`);
       continue;

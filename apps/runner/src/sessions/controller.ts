@@ -100,6 +100,9 @@ export interface ControllerOptions {
   ownerId?: string;
 }
 
+// setTimeout fires at once for delays above this, so longer deadlines are clamped to it (~24.8 days).
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 const LIMIT_KINDS = new Set<Failure['kind']>(['usage_limit', 'usage_limit_suspected', 'transient_throttle', 'outage']);
 
 export class RelayController {
@@ -234,8 +237,9 @@ export class RelayController {
     return { applied: true, status: input.decision === 'reject' ? 'rejected' : 'approved' };
   }
 
-  // Resume a paused run. `fallback` continues on the next route (user-confirmed switch).
-  resume(sessionId: string, opts: { fallback: boolean; note?: string }): { runId: string } {
+  // Resume a paused run. `fallback` continues on the next route (user-confirmed switch);
+  // `skipConnectionId` passes over that provider for this cycle ("Skip this provider").
+  resume(sessionId: string, opts: { fallback: boolean; note?: string; skipConnectionId?: string }): { runId: string } {
     const run = [...this.store.runsForSession(sessionId)].reverse().find((r) => PAUSED_STATES.has(r.state));
     if (!run) throw new RelayError('not_paused', 'No paused run in this session');
     const session = this.requireSession(sessionId);
@@ -244,17 +248,21 @@ export class RelayController {
     const last = attempts.at(-1) ?? null;
     const tried = new Set<string>();
     if (opts.fallback && last) tried.add(`${last.connectionId}:${last.requestedModel}`);
+    const skip = opts.skipConnectionId;
+    if (skip) for (const r of session.fallback.routes) if (r.connectionId === skip) tried.add(routeKey(r));
+    const moving = opts.fallback || !!skip;
     const project = session.projectId ? this.store.getProject(session.projectId) : null;
-    const pick = this.pickRoute(session, project, tried, opts.fallback ? (last?.connectionId ?? null) : null);
+    const pick = this.pickRoute(session, project, tried, moving ? (last?.connectionId ?? null) : null);
     if (!pick.route) throw new RelayError('no_route', `No eligible route: ${pick.reasons.join('; ')}`);
     let cp = this.store.latestCheckpoint(sessionId);
-    if (!cp || cp.runId !== run.id) cp = this.checkpoint(run, session, project, last, opts.fallback ? 'User-confirmed continuation on next provider' : 'Resumed by user');
+    const why = skip ? `User skipped ${skip}` : opts.fallback ? 'User-confirmed continuation on next provider' : 'Resumed by user';
+    if (!cp || cp.runId !== run.id) cp = this.checkpoint(run, session, project, last, why);
     else if (opts.note) cp = this.checkpoint(run, session, project, last, cp.switchReason ?? 'Resumed by user');
     const handoff = buildHandoff(cp, this.budgetFor(pick.route));
     if (handoff.blockedBy) throw new RelayError('context_budget', handoff.blockedBy);
     this.transition(run.id, 'preparing', 'Resumed by user');
     if (last && pick.route.connectionId !== last.connectionId) {
-      this.emit(sessionId, run.id, null, 'provider.switched', { from: { connectionId: last.connectionId, modelId: last.requestedModel }, to: pick.route, reason: 'User-confirmed fallback', simulated: false });
+      this.emit(sessionId, run.id, null, 'provider.switched', { from: { connectionId: last.connectionId, modelId: last.requestedModel }, to: pick.route, reason: skip ? `User skipped ${skip}` : 'User-confirmed fallback', simulated: false });
     }
     this.launch(run.id, { route: pick.route, prompt: handoff.prompt, tried, parentAttemptId: last?.id ?? null }, true);
     return { runId: run.id };
@@ -441,7 +449,7 @@ export class RelayController {
       return {
         route,
         authenticated: !!a && (a.isMock || status?.auth === 'authenticated'),
-        billing: (a?.isMock ? 'subscription' : (status?.billing ?? 'unknown')) as RouteCandidate['billing'],
+        billing: (status?.billing ?? (a?.isMock ? 'subscription' : 'unknown')) as RouteCandidate['billing'],
         modelAvailable: !!a && (a.isMock || !status || status.models.length === 0 || status.models.includes(route.modelId)),
         coolingDownUntil: this.cooldowns.get(routeKey(route)) ?? null,
         isMock: a?.isMock ?? false,
@@ -484,6 +492,7 @@ export class RelayController {
       let resume = start.resume ?? null;
       const tried = start.tried;
       let throttleRetries = 0;
+      let transportRetries = 0;
       let contextRetries = 0;
 
       for (;;) {
@@ -504,7 +513,7 @@ export class RelayController {
           startedAt: new Date().toISOString(),
           endedAt: null,
           termination: null,
-          retryCount: throttleRetries,
+          retryCount: throttleRetries + transportRetries,
         };
         this.store.insertAttempt(attempt);
         this.store.updateRun(runId, { activeAttemptId: attempt.id });
@@ -521,7 +530,7 @@ export class RelayController {
           prompt,
           permissionProfile: project ? project.permissionProfile : 'chat',
           resumeProviderSessionId: resume && resume.connectionId === route.connectionId ? resume.providerSessionId : null,
-        });
+        }, session.fallback.attemptTimeoutMs ?? DEFAULT_FALLBACK.attemptTimeoutMs);
 
         if (active.cancelRequested) return this.cancel(runId);
         if (outcome.termination === 'completed') {
@@ -533,12 +542,14 @@ export class RelayController {
         if (LIMIT_KINDS.has(failure.kind)) this.emit(session.id, runId, attempt.id, 'limit.observed', { failure });
         if (failure.kind === 'usage_limit' && failure.resetAt) this.cooldowns.set(routeKey(route), Date.parse(failure.resetAt));
 
-        const decision = decide(failure, { config: session.fallback, throttleRetries, contextRetries, random: this.random });
+        const unresolvedTools = this.store.toolActionsForRun(runId).some((t) => t.attemptId === attempt.id && (t.status === 'unknown' || t.status === 'started'));
+        const decision = decide(failure, { config: session.fallback, throttleRetries, transportRetries, contextRetries, unresolvedTools, random: this.random });
         if (decision.action === 'retry_same') {
-          throttleRetries++;
+          if (failure.kind === 'transport') transportRetries++;
+          else throttleRetries++;
           this.emit(session.id, runId, attempt.id, 'diagnostic', { level: 'warn', message: `${decision.reason} in ${decision.delayMs} ms` });
           await this.clock.sleep(decision.delayMs);
-          if (this.store.toolActionsForRun(runId).length) prompt = buildHandoff(this.checkpoint(this.store.getRun(runId)!, session, project, attempt, 'Retry after throttle'), this.budgetFor(route)).prompt;
+          if (this.store.toolActionsForRun(runId).length) prompt = buildHandoff(this.checkpoint(this.store.getRun(runId)!, session, project, attempt, failure.kind === 'transport' ? 'Retry after lost connection' : 'Retry after throttle'), this.budgetFor(route)).prompt;
           parentAttemptId = attempt.id;
           continue;
         }
@@ -593,6 +604,7 @@ export class RelayController {
         prompt = handoff.prompt;
         parentAttemptId = attempt.id;
         throttleRetries = 0;
+        transportRetries = 0;
       }
     } finally {
       if (project) this.leases.release(project.root, leaseOwner);
@@ -605,13 +617,29 @@ export class RelayController {
     this.store.clearTransitionIntent(runId);
   }
 
-  private async runAttempt(active: ActiveRun, adapter: ProviderAdapter, attempt: Attempt, input: Parameters<ProviderAdapter['startAttempt']>[0]): Promise<AttemptOutcome> {
+  private async runAttempt(active: ActiveRun, adapter: ProviderAdapter, attempt: Attempt, input: Parameters<ProviderAdapter['startAttempt']>[0], timeoutMs: number): Promise<AttemptOutcome> {
     const sessionId = active.sessionId;
     const runId = active.runId;
     const handle = adapter.startAttempt(input);
     active.handle = handle;
     if (handle.pgid) this.store.setSetting(`proc:${attempt.id}`, handle.pgid);
     if (active.cancelRequested) void handle.interrupt('user stop');
+    // The runner's own deadline: stop the attempt like an interrupt, then record a timeout.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void handle.interrupt('attempt timeout');
+    }, Math.min(timeoutMs, MAX_TIMER_MS));
+    try {
+      return await this.collectAttempt(active, attempt, handle, () => timedOut, timeoutMs);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async collectAttempt(active: ActiveRun, attempt: Attempt, handle: AttemptHandle, timedOut: () => boolean, timeoutMs: number): Promise<AttemptOutcome> {
+    const sessionId = active.sessionId;
+    const runId = active.runId;
     const partial = new Map<string, { id: string; text: string }>();
     const tag = () => {
       const a = this.store.getAttempt(attempt.id)!;
@@ -631,7 +659,14 @@ export class RelayController {
       if (raw.providerEventId && this.store.seenProviderEvent(attempt.id, raw.providerEventId)) continue;
       this.applyAdapterEvent(sessionId, runId, attempt, raw, partial, tag);
     }
-    const outcome = await handle.done;
+    let outcome = await handle.done;
+    if (timedOut() && outcome.termination !== 'completed' && !active.cancelRequested) {
+      outcome = {
+        ...outcome,
+        termination: 'interrupted',
+        failure: { kind: 'timeout', message: `no result within ${timeoutMs} ms`, evidence: 'runner:attemptTimeoutMs', retryAfterMs: null, resetAt: null, scope: null, simulated: false },
+      };
+    }
     for (const [, p] of partial) this.emit(sessionId, runId, attempt.id, 'message.interrupted', { ...tag(), messageId: p.id, text: p.text, reason: outcome.termination });
     // Tool calls that never reported a result are now unknown — never assumed complete.
     for (const t of this.store.toolActionsForRun(runId).filter((t) => t.attemptId === attempt.id && t.status === 'started')) {

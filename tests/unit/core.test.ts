@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TRANSITIONS, assertTransition, canTransition, decide, selectNextRoute, type RouteCandidate } from '@wots/core';
+import { TRANSITIONS, assertTransition, canTransition, decide, selectNextRoute, throttleDelay, type RouteCandidate } from '@wots/core';
 import { RunState, type Failure, type FallbackConfig } from '@wots/protocol';
 
 const cfg: FallbackConfig = {
@@ -58,11 +58,24 @@ describe('failure policy (spec §9 table)', () => {
     expect(decide(f('permission_denied'), ctx).action).toBe('fail');
     expect(decide(f('policy_refusal'), ctx).action).toBe('fail');
   });
-  it('auth, model, unknown, transport pause', () => {
+  it('auth, model, unknown pause', () => {
     expect(decide(f('auth'), ctx)).toMatchObject({ action: 'pause', state: 'paused_auth' });
     expect(decide(f('model_unavailable'), ctx).action).toBe('pause');
     expect(decide(f('unknown'), ctx)).toMatchObject({ action: 'pause', state: 'paused_uncertain' });
-    expect(decide(f('transport'), ctx).action).toBe('pause');
+  });
+  it('transport retries the same route while transportRetries remain, then pauses', () => {
+    expect(decide(f('transport'), ctx)).toMatchObject({ action: 'retry_same', delayMs: throttleDelay(0, null, ctx.random) });
+    expect(decide(f('transport'), { ...ctx, transportRetries: 1 })).toMatchObject({ action: 'retry_same' });
+    expect(decide(f('transport'), { ...ctx, transportRetries: 2 })).toMatchObject({ action: 'pause', state: 'paused_uncertain' });
+    expect(decide(f('transport'), { ...ctx, config: { ...cfg, transportRetries: 0 } }).action).toBe('pause');
+    // A tool call without a recorded result is never blindly retried.
+    expect(decide(f('transport'), { ...ctx, unresolvedTools: true }).action).toBe('pause');
+  });
+  it('throttleDelay backs off exponentially with bounded jitter', () => {
+    expect(throttleDelay(0, null, () => 0)).toBe(2000);
+    expect(throttleDelay(1, null, () => 0.5)).toBe(4500);
+    expect(throttleDelay(0, 1000, () => 1)).toBe(1250);
+    expect(throttleDelay(10, null, () => 1)).toBe(60_000);
   });
   it('context too large retries once', () => {
     expect(decide(f('context_too_large'), ctx).action).toBe('retry_compacted');
@@ -73,6 +86,12 @@ describe('failure policy (spec §9 table)', () => {
 describe('route selection', () => {
   const cand = (connectionId: string, modelId: string, x: Partial<RouteCandidate> = {}): RouteCandidate => ({ route: { connectionId, modelId }, authenticated: true, billing: 'subscription', modelAvailable: true, coolingDownUntil: null, isMock: false, ...x });
   const base = { config: cfg, tried: new Set<string>(), crossProviderConsent: true, currentConnectionId: 'claude-code', now: 1000, allowMock: false };
+  it('skips routes on disabled connections with a visible reason', () => {
+    const r = selectNextRoute({ ...base, config: { ...cfg, disabledConnections: ['claude-code'] }, candidates: [cand('claude-code', 'claude-opus-5-5'), cand('codex', 'gpt-6-astra')] });
+    expect(r.route).toEqual({ connectionId: 'codex', modelId: 'gpt-6-astra' });
+    const none = selectNextRoute({ ...base, config: { ...cfg, disabledConnections: ['claude-code', 'codex'] }, candidates: [cand('claude-code', 'claude-opus-5-5'), cand('codex', 'gpt-6-astra')] });
+    expect(none).toEqual({ route: null, reasons: ['claude-code: disabled by user', 'codex: disabled by user'] });
+  });
   it('skips tried routes and picks the next', () => {
     expect(selectNextRoute({ ...base, candidates: [cand('claude-code', 'claude-opus-5-5'), cand('codex', 'gpt-6-astra')], tried: new Set(['claude-code:claude-opus-5-5']) }).route).toEqual({ connectionId: 'codex', modelId: 'gpt-6-astra' });
   });

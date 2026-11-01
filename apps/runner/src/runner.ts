@@ -124,7 +124,7 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
     'messages.send': (p) => relay.sendMessage(SendMessageParams.parse(p)),
     'runs.interrupt': (p) => relay.interrupt(z.object({ runId: z.string() }).parse(p).runId),
     'runs.resume': (p) => {
-      const params = z.object({ sessionId: z.string(), fallback: z.boolean().default(false), note: z.string().max(20_000).optional() }).parse(p);
+      const params = z.object({ sessionId: z.string(), fallback: z.boolean().default(false), note: z.string().max(20_000).optional(), skipConnectionId: z.string().optional() }).parse(p);
       return relay.resume(params.sessionId, params);
     },
     // A paired device is identified by its authenticated id, never by what it claims.
@@ -156,6 +156,14 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
     'fallback.set': (p) => {
       const cfg = FallbackConfig.parse(p);
       if (cfg.routes.some((r) => relay.adapter(r.connectionId)?.isMock)) throw new RelayError('invalid_params', 'Mock routes cannot be part of the real fallback order');
+      store.setSetting('fallback', cfg);
+      return cfg;
+    },
+    // Local socket only (not in MOBILE_METHODS): switch a real provider on or off in the fallback order.
+    'providers.setEnabled': (p) => {
+      const params = z.object({ connectionId: z.string(), enabled: z.boolean(), modelId: z.string().min(1).optional() }).parse(p);
+      if (relay.adapter(params.connectionId)?.isMock) throw new RelayError('invalid_params', 'Mock connections cannot be part of the real fallback order');
+      const cfg = FallbackConfig.parse(setProviderEnabled(loadFallback(store), params));
       store.setSetting('fallback', cfg);
       return cfg;
     },
@@ -196,6 +204,26 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
 // adds or reorders routes; new providers join only when the user enables them.
 export function loadFallback(store: Pick<Store, 'getSetting'>): FallbackConfig {
   return FallbackConfig.parse(store.getSetting('fallback', null) ?? defaultFallback());
+}
+
+// Where each real provider sits in the fallback order when it is switched on.
+export const CANONICAL_CONNECTIONS = ['claude-code', 'codex', 'cursor', 'gemini'] as const;
+
+// Enabling adds the route at its canonical position (a model is required the first time) and
+// clears the disable flag; disabling keeps the route so its model choice survives.
+export function setProviderEnabled(cfg: FallbackConfig, p: { connectionId: string; enabled: boolean; modelId?: string }): FallbackConfig {
+  const rank = (id: string) => (CANONICAL_CONNECTIONS as readonly string[]).indexOf(id);
+  if (rank(p.connectionId) < 0) throw new RelayError('invalid_params', `Unknown provider connection ${p.connectionId}. Options: ${CANONICAL_CONNECTIONS.join(', ')}`);
+  const others = cfg.disabledConnections.filter((id) => id !== p.connectionId);
+  if (!p.enabled) return { ...cfg, disabledConnections: [...others, p.connectionId] };
+  let routes = cfg.routes;
+  if (!routes.some((r) => r.connectionId === p.connectionId)) {
+    if (!p.modelId) throw new RelayError('invalid_params', `Choose a model to enable ${p.connectionId}`);
+    const at = routes.findIndex((r) => rank(r.connectionId) > rank(p.connectionId));
+    const route = { connectionId: p.connectionId, modelId: p.modelId };
+    routes = at < 0 ? [...routes, route] : [...routes.slice(0, at), route, ...routes.slice(at)];
+  }
+  return { ...cfg, routes, disabledConnections: others };
 }
 
 function defaultFallback() {

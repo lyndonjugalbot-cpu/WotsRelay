@@ -43,7 +43,10 @@ export interface Harness {
   home: string;
 }
 
-export function harness(scenario: string, opts: { consent?: boolean; adapters?: ProviderAdapter[]; failsToQuiesce?: boolean; dbPath?: string; home?: string; repo?: string } = {}): Harness {
+export function harness(
+  scenario: string,
+  opts: { consent?: boolean; adapters?: ProviderAdapter[]; failsToQuiesce?: boolean; dbPath?: string; home?: string; repo?: string; onEvent?: (e: EventEnvelope, relay: RelayController) => void } = {},
+): Harness {
   const home = opts.home ?? tempDir('wots-home-');
   const store = new Store(opts.dbPath ?? join(home, 'wots.db'));
   const events: EventEnvelope[] = [];
@@ -52,7 +55,10 @@ export function harness(scenario: string, opts: { consent?: boolean; adapters?: 
     store,
     leases: new WorkspaceLeases(join(home, 'leases')),
     adapters: opts.adapters ?? [primary, secondary],
-    publish: (e) => events.push(e),
+    publish: (e) => {
+      events.push(e);
+      opts.onEvent?.(e, relay);
+    },
     clock: fakeClock,
     random: () => 0.5,
   });
