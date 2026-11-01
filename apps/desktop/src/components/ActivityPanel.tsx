@@ -1,5 +1,5 @@
 import type { SessionView } from '../api.ts';
-import type { Timeline } from '../timeline.ts';
+import type { Timeline } from '@wots/timeline';
 import { modelLabel, routeLabel } from '../labels.ts';
 
 export function ActivityPanel({ timeline, view, onClose }: { timeline: Timeline; view: SessionView | null; onClose: () => void; sessionId: string }) {

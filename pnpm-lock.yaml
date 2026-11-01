@@ -44,6 +44,9 @@ importers:
       '@wots/storage':
         specifier: workspace:*
         version: link:packages/storage
+      '@wots/timeline':
+        specifier: workspace:*
+        version: link:packages/timeline
       '@wots/workspace':
         specifier: workspace:*
         version: link:packages/workspace
@@ -104,6 +107,9 @@ importers:
       '@wots/runner':
         specifier: workspace:*
         version: link:../runner
+      '@wots/timeline':
+        specifier: workspace:*
+        version: link:../../packages/timeline
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -245,6 +251,12 @@ importers:
         version: link:../protocol
 
   packages/storage:
+    dependencies:
+      '@wots/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/timeline:
     dependencies:
       '@wots/protocol':
         specifier: workspace:*

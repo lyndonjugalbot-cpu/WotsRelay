@@ -1,0 +1,4 @@
+{
+  "//": "The relay client is plain TypeScript shared with the repo tests; it uses the repo config, not Expo's.",
+  "extends": "../../../../tsconfig.base.json"
+}

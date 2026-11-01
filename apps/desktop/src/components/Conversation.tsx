@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@wots/protocol';
 import type { SessionView } from '../api.ts';
-import type { Timeline, TimelineItem } from '../timeline.ts';
+import type { Timeline, TimelineItem } from '@wots/timeline';
 import { renderMarkdown } from '../markdown.ts';
 import { STATE_TEXT, isMockRoute, lane, modelLabel, routeLabel } from '../labels.ts';
 
