@@ -58,3 +58,4 @@ export function laneFor(connectionId: string | null, isMock = false): 'laneA' | 
   if (id === 'gemini') return 'laneD';
   return 'laneA';
 }
+export { logo } from './logo.ts';

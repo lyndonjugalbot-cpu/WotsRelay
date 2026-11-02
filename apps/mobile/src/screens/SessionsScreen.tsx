@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import type { Project, Session } from '../../../../packages/protocol/src/index.ts';
+import { Logo } from '../Logo.tsx';
 import type { ConnectionState, RelayClient } from '../relay/client.ts';
 import { laneColor, space, type, usePalette } from '../theme.ts';
 import { Button, Card, ConnectionPill, textStyles, UsageRow, type UsageWindow } from '../ui.tsx';
@@ -78,9 +79,12 @@ export function SessionsScreen({ client, connection, onOpen, onUnpair }: { clien
       ListHeaderComponent={
         <View style={{ gap: space[4] }}>
           <View style={styles.header}>
-            <Text style={t.title} accessibilityRole="header">
-              WotsRelay
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: space[2] }}>
+              <Logo variant="mark" height={30} />
+              <Text style={t.title} accessibilityRole="header">
+                WotsRelay
+              </Text>
+            </View>
             <ConnectionPill state={connection} />
           </View>
           {usage ? (

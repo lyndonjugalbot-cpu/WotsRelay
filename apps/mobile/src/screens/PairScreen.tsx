@@ -2,6 +2,7 @@ import * as Device from 'expo-device';
 import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { nativeTransport } from '../native-transport.ts';
+import { Logo } from '../Logo.tsx';
 import { pairDevice, parsePairingLink, type Pairing } from '../relay/client.ts';
 import { space, type, usePalette } from '../theme.ts';
 import { Button, Card, textStyles } from '../ui.tsx';
@@ -38,6 +39,9 @@ export function PairScreen({ initialLink, notice, onPaired }: { initialLink: str
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={{ alignItems: 'center', paddingVertical: space[4] }}>
+          <Logo variant="full" height={150} />
+        </View>
         <Text style={t.title} accessibilityRole="header">
           Pair with your Mac
         </Text>

@@ -72,6 +72,11 @@ async function connectRunner(): Promise<RunnerClient> {
   return connecting;
 }
 
+// Development build: show the WotsRelay icon in the Dock (a packaged build carries it in its .icns).
+function setDockIcon() {
+  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(join(__dirname, 'icon.png'));
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1360,
@@ -147,6 +152,7 @@ ipcMain.handle('wots:reconnect', async () => {
 });
 
 app.whenReady().then(async () => {
+  setDockIcon();
   // Strict CSP for everything the renderer loads; no remote content.
   session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
     cb({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"] } });
