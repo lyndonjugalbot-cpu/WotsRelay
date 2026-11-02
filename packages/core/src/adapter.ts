@@ -4,6 +4,7 @@ import type {
   Effort,
   Failure,
   ModelCapability,
+  ProviderCapabilities,
   PermissionProfile,
   Provider,
   RiskCategory,
@@ -29,6 +30,11 @@ export type AdapterEvent =
 
 export type AdapterEventEnvelope = AdapterEvent & { providerEventId?: string };
 
+// Start of a `tool.denied` message meaning "the provider proposed this change but did not apply
+// it" (edits switched off), as opposed to a user or permission denial. Handoffs treat it as
+// pending work, never as "do not retry".
+export const PROPOSED_ONLY_PREFIX = 'Proposed only';
+
 export interface AttemptInput {
   attemptId: string;
   cwd: string | null;
@@ -38,6 +44,8 @@ export interface AttemptInput {
   permissionProfile: PermissionProfile;
   // Native session to resume on the same provider only. Never another provider's id.
   resumeProviderSessionId: string | null;
+  // Project the attempt runs for, so adapters can honour per-project settings. Null for chat.
+  projectId?: string | null;
 }
 
 export type AttemptTermination = 'completed' | 'failed' | 'interrupted';
@@ -83,6 +91,7 @@ export interface ProviderAdapter {
   probe(): Promise<ProbeResult>;
   getConnectionStatus(): Promise<Connection>;
   listModels(): Promise<ModelCapability[]>;
+  capabilities(): ProviderCapabilities;
   startAttempt(input: AttemptInput): AttemptHandle;
   dispose(): Promise<void>;
 }

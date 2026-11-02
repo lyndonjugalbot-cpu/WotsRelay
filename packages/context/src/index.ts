@@ -68,6 +68,11 @@ export function buildHandoff(cp: Checkpoint, budget: HandoffBudget = DEFAULT_BUD
     critical: true,
     text: `## Progress\nCompleted (backed by the action log):\n${listOrNone(cp.completedSteps)}\nRemaining:\n${listOrNone(cp.pendingSteps)}`,
   });
+  sections.push({
+    key: 'do-not-repeat',
+    critical: true,
+    text: `## Do not repeat\nThese steps already ran in this session. Verify their result; do not run them again.\n${listOrNone(cp.completedSteps)}`,
+  });
   if (cp.changedFiles.length) {
     sections.push({
       key: 'changed-files',
@@ -75,6 +80,8 @@ export function buildHandoff(cp: Checkpoint, budget: HandoffBudget = DEFAULT_BUD
       text: `## Files changed so far in this run (verify; do not redo)\n${cp.changedFiles.map((f) => `- ${f.change}: ${f.path}${f.sha256 ? ` (sha256 ${f.sha256.slice(0, 16)})` : ''}`).join('\n')}${cp.baselineCommit ? `\nBaseline commit: ${cp.baselineCommit}` : ''}`,
     });
   }
+  if (cp.gitStatus.length) sections.push({ key: 'git-status', critical: false, text: `## Git status (paths only)\n${cp.gitStatus.map((l) => `- ${l}`).join('\n')}` });
+  if (cp.knownErrors.length) sections.push({ key: 'known-errors', critical: false, text: `## Known errors\n${cp.knownErrors.map((l) => `- ${l}`).join('\n')}` });
   if (cp.diff) {
     const full = `## Diff\n\`\`\`diff\n${cp.diff}\n\`\`\``;
     sections.push({ key: 'diff', critical: false, text: full, shrink: () => `## Diff\n(Diff omitted for size; inspect the changed files listed above.)` });

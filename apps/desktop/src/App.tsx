@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventEnvelope, Project, Session } from '@wots/protocol';
 import { api, bridge, type SessionView } from './api.ts';
 import { applyEvents, emptyTimeline, type Timeline } from '@wots/timeline';
+import { Logo } from './components/Logo.tsx';
 import { RelayCore } from './components/RelayCore.tsx';
 import { Conversation } from './components/Conversation.tsx';
 import { Composer } from './components/Composer.tsx';
@@ -201,6 +202,9 @@ export function App() {
     <div className={`shell ${sidebarOpen ? '' : 'sidebar-closed'} ${showActivity ? 'with-activity' : ''}`}>
       <aside className="sidebar" aria-label="Sessions">
         <div className="drag-region" />
+        <div className="brand">
+          <Logo variant="lockup" replayKey={lastHandoff?.id ?? null} />
+        </div>
         <div className="core-block">
           <RelayCore active={activeLane} running={live} handoffKey={lastHandoff?.id ?? null} handoffTo={lastHandoff && lastHandoff.kind === 'handoff' ? (lane(lastHandoff.to) === 'a' ? 'A' : 'B') : null} />
           <div className="core-status" aria-live="polite">
@@ -319,6 +323,7 @@ function shortPath(p: string): string {
 function Welcome({ onChat, onCode, disabled }: { onChat: () => void; onCode: () => void; disabled: boolean }) {
   return (
     <section className="welcome">
+      <Logo variant="full" />
       <h2>Start with Claude Opus 5.5. Keep going with GPT-6 Astra.</h2>
       <p>
         When Claude reaches a confirmed usage limit, WotsRelay saves a checkpoint and hands the task to GPT-6 Astra on {routeLabel('codex')}. Work stays on this Mac, and each reply shows which model wrote it.

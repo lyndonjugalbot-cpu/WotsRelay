@@ -309,6 +309,22 @@ kbd { padding: 1px 6px; border-radius: 5px; border: 1px solid var(--hairline); b
   .shell.with-activity { grid-template-columns: var(--sidebar) minmax(0, 1fr); }
   .activity { position: fixed; right: 0; top: 0; bottom: 0; width: min(var(--activity), 92vw); z-index: 5; box-shadow: -12px 0 32px color-mix(in oklab, #000 18%, transparent); }
 }
+/* Logo: the mark settles, the arrow sweeps across it (the relay), then the wordmark follows.
+   Reduced motion (below) shows the finished logo. */
+.logo { color: var(--ink); fill: currentColor; }
+.logo path { transform-box: fill-box; }
+.logo-full { display: block; width: min(280px, 60%); height: auto; margin: 0 0 28px; }
+.logo-lockup { display: inline-flex; align-items: center; gap: 10px; }
+.lg-lockup-mark { height: 38px; width: auto; }
+.lg-lockup-word { height: 19px; width: auto; }
+.logo .lg-mark { transform-origin: 50% 60%; animation: lg-settle 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.logo .lg-arrow { animation: lg-sweep 760ms cubic-bezier(0.65, 0, 0.35, 1) 220ms both; }
+.logo .lg-letter { animation: lg-letter 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(480ms + var(--i) * 40ms); }
+@keyframes lg-settle { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
+@keyframes lg-sweep { from { clip-path: inset(0 100% 0 0); opacity: 0.2; } 60% { opacity: 1; } to { clip-path: inset(0 0 0 0); opacity: 1; } }
+@keyframes lg-letter { from { opacity: 0; transform: translateY(18%); } to { opacity: 1; transform: none; } }
+.brand { padding: 4px 16px 10px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

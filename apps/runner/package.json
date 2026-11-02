@@ -13,6 +13,7 @@
   "dependencies": {
     "@wots/adapter-claude-code": "workspace:*",
     "@wots/adapter-codex": "workspace:*",
+    "@wots/adapter-cursor": "workspace:*",
     "@wots/adapter-mock": "workspace:*",
     "@wots/context": "workspace:*",
     "@wots/core": "workspace:*",

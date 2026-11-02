@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo.svg" alt="WotsRelay" width="260">
+  </picture>
+</p>
+
 # WotsRelay
 
 A personal workspace for chat and coding on your Mac. It prefers **Claude Opus 5.5** through the official Claude Code CLI and, when Claude reaches a confirmed usage limit, continues the same task with **GPT-6 Astra** through Codex — from a saved checkpoint, with every reply labelled by the model that wrote it.

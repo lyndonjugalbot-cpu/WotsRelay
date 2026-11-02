@@ -9,7 +9,7 @@ import {
   type ProbeResult,
   type ProviderAdapter,
 } from '@wots/core';
-import type { Connection, Failure, ModelCapability, RiskCategory } from '@wots/protocol';
+import type { Connection, Failure, ModelCapability, ProviderCapabilities, RiskCategory } from '@wots/protocol';
 
 export type MockStep =
   | { kind: 'text'; text: string }
@@ -18,6 +18,10 @@ export type MockStep =
   | { kind: 'writeRemaining'; files: Array<{ path: string; content: string }> }
   | { kind: 'fail'; failure: Omit<Failure, 'simulated'> }
   | { kind: 'toolStartNoResult'; name: string; args: unknown; risk: RiskCategory }
+  // A tool that runs and reports a failure (a failing test, a rejected command): not a provider failure.
+  | { kind: 'toolFailed'; name: string; args: unknown; message: string }
+  // A tool that runs to completion (a passing test run, a build).
+  | { kind: 'toolDone'; name: string; args: unknown; risk: RiskCategory; result: string }
   | { kind: 'approval'; action: string; risk: RiskCategory; thenWrite?: { path: string; content: string } }
   | { kind: 'delay'; ms: number }
   | { kind: 'malformed' }
@@ -54,6 +58,10 @@ export class MockAdapter implements ProviderAdapter {
   constructor(opts: MockAdapterOptions) {
     this.opts = opts;
     this.connectionId = opts.connectionId;
+  }
+
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, nativeResume: true, approvals: 'bridged', edits: 'apply', usage: 'percent', models: 'fixed' };
   }
 
   async probe(): Promise<ProbeResult> {
@@ -155,6 +163,18 @@ export class MockAdapter implements ProviderAdapter {
           case 'toolStartNoResult':
             emit({ type: 'tool.started', providerToolId: `t${++counter}`, name: step.name, args: step.args, risk: step.risk, paths: [] });
             return this.end(channel, 'failed', { kind: 'transport', message: 'Provider stream disconnected during tool execution', evidence: 'mock:disconnect', retryAfterMs: null, resetAt: null, scope: null, simulated: true }, providerSessionId);
+          case 'toolFailed': {
+            const toolId = `t${++counter}`;
+            emit({ type: 'tool.started', providerToolId: toolId, name: step.name, args: step.args, risk: 'read-only', paths: [] });
+            emit({ type: 'tool.failed', providerToolId: toolId, message: step.message });
+            break;
+          }
+          case 'toolDone': {
+            const toolId = `t${++counter}`;
+            emit({ type: 'tool.started', providerToolId: toolId, name: step.name, args: step.args, risk: step.risk, paths: [] });
+            emit({ type: 'tool.completed', providerToolId: toolId, result: step.result });
+            break;
+          }
           case 'approval': {
             const reqId = `req${++counter}`;
             const toolId = `t${counter}`;
@@ -327,4 +347,53 @@ export function mockPair(scenario: keyof typeof SCENARIOS | string, opts: { fail
     new MockAdapter({ connectionId: 'mock-claude', label: 'Mock Claude', models: ['claude-opus-5-5'], script: s.primary, failsToQuiesce: opts.failsToQuiesce }),
     new MockAdapter({ connectionId: 'mock-codex', label: 'Mock Codex', models: ['gpt-6-astra'], script: s.secondary }),
   ];
+}
+
+// ---- Four-provider chain (Claude → Codex → Cursor → Gemini) ------------------------------
+
+const CHAIN_LINKS = [
+  { connectionId: 'mock-claude', label: 'Mock Claude', model: 'claude-opus-5-5', billingMode: 'subscription' },
+  { connectionId: 'mock-codex', label: 'Mock Codex', model: 'gpt-6-astra', billingMode: 'subscription' },
+  { connectionId: 'mock-cursor', label: 'Mock Cursor', model: 'default', billingMode: 'subscription' },
+  // The Gemini API is pay-per-use, so its route needs allowApiBilling like the real one.
+  { connectionId: 'mock-gemini', label: 'Mock Gemini', model: 'gemini-3-pro', billingMode: 'api' },
+] as const;
+
+type ChainLink = (typeof CHAIN_LINKS)[number]['connectionId'];
+
+const answer = (who: string): MockScript => () => [{ kind: 'text', text: `Continuing the task on ${who}.` }];
+const transportLost: MockStep = { kind: 'fail', failure: { kind: 'transport', message: 'Connection reset by peer', evidence: 'mock:ECONNRESET', retryAfterMs: null, resetAt: null, scope: null } };
+const slow: MockScript = () => [{ kind: 'text', text: 'Working…' }, { kind: 'hang' }];
+
+export const CHAIN_SCENARIOS: Record<string, { description: string; scripts: Partial<Record<ChainLink, MockScript>> }> = {
+  'chain-quota': {
+    description: 'Claude, Codex and Cursor each hit a confirmed usage limit in turn; Gemini finishes',
+    scripts: { 'mock-claude': () => [quota()], 'mock-codex': () => [quota()], 'mock-cursor': () => [quota()], 'mock-gemini': answer('Gemini') },
+  },
+  'cursor-auth': {
+    description: 'Claude and Codex are limited; Cursor needs sign-in; Gemini can take over when Cursor is skipped',
+    scripts: {
+      'mock-claude': () => [quota()],
+      'mock-codex': () => [quota()],
+      'mock-cursor': () => [{ kind: 'fail', failure: { kind: 'auth', message: 'Not logged in', evidence: 'mock:cursor-unauthenticated', retryAfterMs: null, resetAt: null, scope: null } }],
+      'mock-gemini': answer('Gemini'),
+    },
+  },
+  'flaky-network': {
+    description: 'Claude loses its connection twice, then succeeds on the same route',
+    scripts: { 'mock-claude': (_i, n) => (n <= 2 ? [transportLost] : [{ kind: 'text', text: 'Back online; done.' }]) },
+  },
+  slow: {
+    description: 'Every provider starts and then never finishes (timeouts, restarts, leases)',
+    scripts: { 'mock-claude': slow, 'mock-codex': slow, 'mock-cursor': slow, 'mock-gemini': slow },
+  },
+};
+
+// Four visibly-labelled mock adapters for chain scenarios. A link without a script answers.
+export function mockChain(scenario: keyof typeof CHAIN_SCENARIOS | string): MockAdapter[] {
+  const s = CHAIN_SCENARIOS[scenario];
+  if (!s) throw new Error(`Unknown mock chain scenario ${scenario}`);
+  return CHAIN_LINKS.map(
+    (l) => new MockAdapter({ connectionId: l.connectionId, label: l.label, models: [l.model], billingMode: l.billingMode, script: s.scripts[l.connectionId] ?? answer(l.label) }),
+  );
 }

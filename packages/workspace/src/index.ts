@@ -104,8 +104,22 @@ export function gitBaseline(root: string): GitBaseline {
   return { isRepo: true, head, dirtyPaths: status ? status.split('\n').map((l) => l.slice(3)) : [] };
 }
 
+// `git status --porcelain=v1` lines (path only, never contents), capped. [] outside a repo.
+export function gitStatusLines(root: string, max = 200): string[] {
+  try {
+    // Not git(): its trim() would eat the leading space of the first " M path" line.
+    const out = execFileSync('git', ['status', '--porcelain=v1'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 });
+    return out.split('\n').filter(Boolean).slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
 // Text diff of changed files against the git baseline when available; otherwise a manifest summary.
-export function workspaceDiff(root: string, changes: FileChange[], maxBytes = 60_000): string {
+export function workspaceDiff(root: string, allChanges: FileChange[], maxBytes = 60_000, extraExclusions: readonly string[] = []): string {
+  // Defence in depth: secret-pattern paths never contribute diff content, whatever the caller passed.
+  const exclusions = [...DEFAULT_SECRET_PATH_PATTERNS, ...extraExclusions];
+  const changes = allChanges.filter((c) => !matchesAny(c.path, exclusions));
   const base = gitBaseline(root);
   if (base.isRepo && base.head) {
     const d = git(root, ['diff', '--no-color', base.head, '--', ...changes.map((c) => c.path)]) ?? '';

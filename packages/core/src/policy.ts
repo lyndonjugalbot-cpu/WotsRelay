@@ -1,4 +1,4 @@
-import type { Failure, FallbackConfig, RouteRef, RunState } from '@wots/protocol';
+import type { Failure, FailureKind, FallbackConfig, ProviderErrorCategory, RouteRef, RunState } from '@wots/protocol';
 
 export const MAX_THROTTLE_RETRIES = 2;
 export const MAX_CONTEXT_RETRIES = 1;
@@ -10,10 +10,46 @@ export type FailureDecision =
   | { action: 'pause'; state: Extract<RunState, 'paused_limits' | 'paused_auth' | 'paused_uncertain'>; reason: string; offerManualFallback: boolean }
   | { action: 'fail'; reason: string };
 
+// Pure display mapping from the stored failure kind to the spec's category. Exhaustive: a new
+// FailureKind fails typecheck here until it is placed.
+export function categoryOf(kind: FailureKind): ProviderErrorCategory {
+  switch (kind) {
+    case 'transient_throttle':
+      return 'RATE_LIMIT';
+    case 'usage_limit':
+    case 'usage_limit_suspected':
+      return 'QUOTA_EXCEEDED';
+    case 'auth':
+      return 'AUTH_EXPIRED';
+    case 'outage':
+    case 'model_unavailable':
+      return 'PROVIDER_UNAVAILABLE';
+    case 'transport':
+      return 'NETWORK_ERROR';
+    case 'timeout':
+      return 'TIMEOUT';
+    case 'permission_denied':
+    case 'policy_refusal':
+      return 'PERMISSION_DENIED';
+    case 'context_too_large':
+    case 'billing_route_conflict':
+    case 'unsupported_version':
+      return 'EXECUTION_ERROR';
+    case 'unknown':
+      return 'UNKNOWN';
+  }
+}
+
+export const DEFAULT_TRANSPORT_RETRIES = 2;
+
 export interface DecisionContext {
   config: FallbackConfig;
   throttleRetries: number;
   contextRetries: number;
+  // Same-route retries already spent on lost connections in this cycle.
+  transportRetries?: number;
+  // The failed attempt left tool calls without a recorded result; a blind retry could repeat them.
+  unresolvedTools?: boolean;
   // Deterministic jitter source so tests can use a fake clock / RNG.
   random: () => number;
 }
@@ -37,9 +73,7 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
       if (ctx.throttleRetries >= MAX_THROTTLE_RETRIES) {
         return { action: 'pause', state: 'paused_limits', reason: 'Provider is throttling; retries exhausted', offerManualFallback: true };
       }
-      const base = failure.retryAfterMs ?? 2000 * 2 ** ctx.throttleRetries;
-      const jitter = Math.floor(base * 0.25 * ctx.random());
-      return { action: 'retry_same', delayMs: Math.min(base + jitter, 60_000), reason: 'Short throttle; retrying' };
+      return { action: 'retry_same', delayMs: throttleDelay(ctx.throttleRetries, failure.retryAfterMs, ctx.random), reason: 'Short throttle; retrying' };
     }
     case 'outage':
       return ctx.config.outageFallback
@@ -59,8 +93,15 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
     case 'policy_refusal':
       // Never switch providers to get around a boundary.
       return { action: 'fail', reason: `${failure.kind === 'permission_denied' ? 'Permission denied' : 'Policy refusal'}: ${failure.message}` };
-    case 'transport':
+    case 'transport': {
+      const used = ctx.transportRetries ?? 0;
+      if (!ctx.unresolvedTools && used < (ctx.config.transportRetries ?? DEFAULT_TRANSPORT_RETRIES)) {
+        return { action: 'retry_same', delayMs: throttleDelay(used, null, ctx.random), reason: 'Connection to provider lost; retrying the same route' };
+      }
       return { action: 'pause', state: 'paused_uncertain', reason: `Connection to provider lost: ${failure.message}`, offerManualFallback: true };
+    }
+    case 'timeout':
+      return { action: 'pause', state: 'paused_uncertain', reason: `The attempt timed out: ${failure.message}`, offerManualFallback: true };
     case 'unsupported_version':
       return { action: 'fail', reason: failure.message };
     case 'unknown':
@@ -69,9 +110,18 @@ export function decide(failure: Failure, ctx: DecisionContext): FailureDecision 
   }
 }
 
+// Exponential backoff with up to 25% jitter, capped at a minute. A provider's own retry-after wins.
+export function throttleDelay(retries: number, retryAfterMs: number | null, random: () => number): number {
+  const base = retryAfterMs ?? 2000 * 2 ** retries;
+  const jitter = Math.floor(base * 0.25 * random());
+  return Math.min(base + jitter, 60_000);
+}
+
 export interface RouteCandidate {
   route: RouteRef;
   authenticated: boolean;
+  // Sign-in is neither confirmed nor refuted (e.g. Cursor before its first successful run).
+  authUnknown?: boolean;
   billing: 'subscription' | 'api' | 'unknown';
   modelAvailable: boolean;
   coolingDownUntil: number | null;
@@ -113,6 +163,9 @@ export interface RouteSelectionInput {
   now: number;
   // Mock routes are only eligible when the session was explicitly created in mock mode.
   allowMock: boolean;
+  // R8: a route whose sign-in is unknown may run only as the session's chosen primary (the first
+  // route, on a new run or an explicit user resume). Never set for automatic fallback selection.
+  allowUnknownAuthForFirst?: boolean;
 }
 
 export function routeKey(r: RouteRef): string {
@@ -129,8 +182,13 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
   const reasons: string[] = [];
   const threshold = input.config.switchAtPercent ?? DEFAULT_SWITCH_AT_PERCENT;
   const nearlyFull: Array<{ route: RouteRef; window: UsageWindow }> = [];
-  for (const route of input.config.routes) {
+  const disabled = new Set(input.config.disabledConnections ?? []);
+  for (const [index, route] of input.config.routes.entries()) {
     const key = routeKey(route);
+    if (disabled.has(route.connectionId)) {
+      reasons.push(`${route.connectionId}: disabled by user`);
+      continue;
+    }
     if (input.tried.has(key)) {
       reasons.push(`${key}: already tried this cycle`);
       continue;
@@ -144,8 +202,9 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
       reasons.push(`${key}: mock route not allowed for a real session`);
       continue;
     }
-    if (!c.authenticated) {
-      reasons.push(`${key}: not authenticated`);
+    // Spec §7: never switch automatically to a provider that lacks valid authorization.
+    if (!c.authenticated && !(c.authUnknown && input.allowUnknownAuthForFirst && index === 0)) {
+      reasons.push(c.authUnknown ? `${key}: sign-in not confirmed yet (never an automatic fallback until a run succeeds)` : `${key}: not authenticated`);
       continue;
     }
     if (!c.modelAvailable) {

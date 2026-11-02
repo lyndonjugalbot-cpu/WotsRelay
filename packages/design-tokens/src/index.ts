@@ -11,6 +11,9 @@ export const color = {
     hairline: '#D5DBE2',
     laneA: '#2B5BD7',
     laneB: '#0B8A80',
+    // Contrast on ground/surface/raised (WCAG 2.x): laneC >= 5.50:1, laneD >= 5.26:1.
+    laneC: '#7A3FC4',
+    laneD: '#A33B7F',
     laneMock: '#8A6A2E',
     paused: '#A86A00',
     failed: '#B4322A',
@@ -26,6 +29,9 @@ export const color = {
     hairline: '#2E3A52',
     laneA: '#7C9DFF',
     laneB: '#3CC2B5',
+    // Contrast on ground/surface/raised (WCAG 2.x): laneC >= 6.26:1, laneD >= 5.74:1.
+    laneC: '#C79BFF',
+    laneD: '#E58AC4',
     laneMock: '#D1A85A',
     paused: '#E3A53C',
     failed: '#F07A70',
@@ -45,7 +51,11 @@ export const type = {
 
 export const layout = { sidebar: 260, conversation: 820, activity: 360, touchTarget: 44, radius: { control: 8, panel: 12, pill: 999 } } as const;
 
-export function laneFor(connectionId: string | null, isMock = false): 'laneA' | 'laneB' | 'laneMock' {
-  if (isMock || connectionId?.startsWith('mock-')) return connectionId === 'mock-codex' ? 'laneB' : 'laneA';
-  return connectionId === 'codex' ? 'laneB' : 'laneA';
+export function laneFor(connectionId: string | null, isMock = false): 'laneA' | 'laneB' | 'laneC' | 'laneD' | 'laneMock' {
+  const id = connectionId?.startsWith('mock-') ? connectionId.slice(5) : connectionId;
+  if (id === 'codex') return 'laneB';
+  if (id === 'cursor') return 'laneC';
+  if (id === 'gemini') return 'laneD';
+  return 'laneA';
 }
+export { logo } from './logo.ts';

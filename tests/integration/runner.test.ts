@@ -97,6 +97,16 @@ describe('runner daemon', () => {
       await expect(a.call('projects.register', { root: '../relative', trusted: true })).rejects.toThrow(/absolute/);
     });
   });
+
+  it('cursor.setApplyEdits stores the per-project opt-in (default off) for known projects only', async () => {
+    await withRunner('success', async ({ a }) => {
+      const { project } = await a.call<{ project: { id: string } }>('projects.register', { root: tempRepo(), trusted: true, permissionProfile: 'edit', crossProviderConsent: true });
+      await expect(a.call('cursor.setApplyEdits', { projectId: 'prj_nope', enabled: true })).rejects.toMatchObject({ code: 'not_found' });
+      await expect(a.call('cursor.setApplyEdits', { projectId: project.id })).rejects.toMatchObject({ code: 'invalid_params' });
+      expect(await a.call('cursor.setApplyEdits', { projectId: project.id, enabled: true })).toEqual({ enabled: true });
+      expect(await a.call('cursor.setApplyEdits', { projectId: project.id, enabled: false })).toEqual({ enabled: false });
+    });
+  });
 });
 
 describe('crash recovery (A08)', () => {

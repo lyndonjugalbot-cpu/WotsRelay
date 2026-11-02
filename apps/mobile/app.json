@@ -14,6 +14,21 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-    "scheme": "wotsrelay"
+    "scheme": "wotsrelay",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#EDF0F3",
+          "dark": {
+            "image": "./assets/splash-icon-dark.png",
+            "backgroundColor": "#141C2C"
+          }
+        }
+      ]
+    ]
   }
 }

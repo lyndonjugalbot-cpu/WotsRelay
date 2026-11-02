@@ -4,12 +4,14 @@ import {
   type ApprovalDecision,
   type Attempt,
   type Checkpoint,
+  type Connection,
   type EventEnvelope,
   type EventPayload,
   type EventType,
   type Failure,
   type FallbackConfig,
   type Project,
+  type ProviderErrorCategory,
   type RouteRef,
   type Run,
   type RunState,
@@ -18,6 +20,8 @@ import {
 } from '@wots/protocol';
 import {
   assertTransition,
+  categoryOf,
+  classifyShellCommand,
   decide,
   routeKey,
   selectNextRoute,
@@ -29,10 +33,11 @@ import {
   type ProviderAdapter,
   type RouteCandidate,
   type UsageWindow,
+  PROPOSED_ONLY_PREFIX,
 } from '@wots/core';
 import type { Store } from '@wots/storage';
 import { buildHandoff, DEFAULT_BUDGET } from '@wots/context';
-import { buildManifest, diffManifests, gitBaseline, workspaceDiff, type WorkspaceLeases } from '@wots/workspace';
+import { buildManifest, diffManifests, gitBaseline, gitStatusLines, workspaceDiff, type WorkspaceLeases } from '@wots/workspace';
 import { canonicalHash, newId, redact } from '@wots/security';
 
 export const DEFAULT_FALLBACK: FallbackConfig = {
@@ -46,6 +51,10 @@ export const DEFAULT_FALLBACK: FallbackConfig = {
   outageFallback: false,
   allowApiBilling: false,
   switchAtPercent: 95,
+  disabledConnections: [],
+  attemptTimeoutMs: 3_600_000,
+  transportRetries: 2,
+  notifyOnSwitch: true,
 };
 
 export const MOCK_FALLBACK: FallbackConfig = {
@@ -95,6 +104,9 @@ export interface ControllerOptions {
   random?: () => number;
   ownerId?: string;
 }
+
+// setTimeout fires at once for delays above this, so longer deadlines are clamped to it (~24.8 days).
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const LIMIT_KINDS = new Set<Failure['kind']>(['usage_limit', 'usage_limit_suspected', 'transient_throttle', 'outage']);
 
@@ -230,8 +242,9 @@ export class RelayController {
     return { applied: true, status: input.decision === 'reject' ? 'rejected' : 'approved' };
   }
 
-  // Resume a paused run. `fallback` continues on the next route (user-confirmed switch).
-  resume(sessionId: string, opts: { fallback: boolean; note?: string }): { runId: string } {
+  // Resume a paused run. `fallback` continues on the next route (user-confirmed switch);
+  // `skipConnectionId` passes over that provider for this cycle ("Skip this provider").
+  resume(sessionId: string, opts: { fallback: boolean; note?: string; skipConnectionId?: string }): { runId: string } {
     const run = [...this.store.runsForSession(sessionId)].reverse().find((r) => PAUSED_STATES.has(r.state));
     if (!run) throw new RelayError('not_paused', 'No paused run in this session');
     const session = this.requireSession(sessionId);
@@ -240,17 +253,22 @@ export class RelayController {
     const last = attempts.at(-1) ?? null;
     const tried = new Set<string>();
     if (opts.fallback && last) tried.add(`${last.connectionId}:${last.requestedModel}`);
+    const skip = opts.skipConnectionId;
+    if (skip) for (const r of session.fallback.routes) if (r.connectionId === skip) tried.add(routeKey(r));
+    const moving = opts.fallback || !!skip;
     const project = session.projectId ? this.store.getProject(session.projectId) : null;
-    const pick = this.pickRoute(session, project, tried, opts.fallback ? (last?.connectionId ?? null) : null);
+    // An explicit user resume may use the session's primary even before its sign-in is confirmed (R8).
+    const pick = this.pickRoute(session, project, tried, moving ? (last?.connectionId ?? null) : null, true);
     if (!pick.route) throw new RelayError('no_route', `No eligible route: ${pick.reasons.join('; ')}`);
     let cp = this.store.latestCheckpoint(sessionId);
-    if (!cp || cp.runId !== run.id) cp = this.checkpoint(run, session, project, last, opts.fallback ? 'User-confirmed continuation on next provider' : 'Resumed by user');
+    const why = skip ? `User skipped ${skip}` : opts.fallback ? 'User-confirmed continuation on next provider' : 'Resumed by user';
+    if (!cp || cp.runId !== run.id) cp = this.checkpoint(run, session, project, last, why);
     else if (opts.note) cp = this.checkpoint(run, session, project, last, cp.switchReason ?? 'Resumed by user');
     const handoff = buildHandoff(cp, this.budgetFor(pick.route));
     if (handoff.blockedBy) throw new RelayError('context_budget', handoff.blockedBy);
     this.transition(run.id, 'preparing', 'Resumed by user');
     if (last && pick.route.connectionId !== last.connectionId) {
-      this.emit(sessionId, run.id, null, 'provider.switched', { from: { connectionId: last.connectionId, modelId: last.requestedModel }, to: pick.route, reason: 'User-confirmed fallback', simulated: false });
+      this.emit(sessionId, run.id, null, 'provider.switched', { from: { connectionId: last.connectionId, modelId: last.requestedModel }, to: pick.route, reason: skip ? `User skipped ${skip}` : 'User-confirmed fallback', simulated: false });
     }
     this.launch(run.id, { route: pick.route, prompt: handoff.prompt, tried, parentAttemptId: last?.id ?? null }, true);
     return { runId: run.id };
@@ -336,9 +354,12 @@ export class RelayController {
     const out: Array<{ connectionId: string; ok: boolean; error?: string }> = [];
     for (const a of this.adapters.values()) {
       try {
-        const c = await a.getConnectionStatus();
+        const reported = await a.getConnectionStatus();
+        // R8: a sign-in confirmed by a successful run outlives a status check that can only say 'unknown'.
+        const prev = this.store.getSetting<ConnCache | null>(`conn:${a.connectionId}`, null);
+        const c = reported.authStatus === 'unknown' && prev?.confirmedByRun ? confirmedConnection(reported) : reported;
         const models = c.authStatus === 'authenticated' ? await a.listModels().catch(() => []) : [];
-        this.store.setSetting(`conn:${a.connectionId}`, { auth: c.authStatus, billing: c.billingMode, models: models.filter((m) => m.verification !== 'unavailable').map((m) => m.modelId), connection: c });
+        this.store.setSetting(`conn:${a.connectionId}`, { auth: c.authStatus, billing: c.billingMode, models: models.filter((m) => m.verification !== 'unavailable').map((m) => m.modelId), connection: c, ...(c !== reported ? { confirmedByRun: true } : {}) });
         for (const m of models) if (m.contextLimit) this.store.setSetting(`ctx:${a.connectionId}:${m.modelId}`, m.contextLimit);
         this.store.setSetting(`models:${a.connectionId}`, models);
         out.push({ connectionId: a.connectionId, ok: true });
@@ -361,7 +382,8 @@ export class RelayController {
     // Return to the primary on a new run: each run starts from the top of the route list.
     // Earlier turns bind the conversation to the provider that answered last.
     const prior = this.lastAttemptBefore(session.id, runId);
-    const pick = this.pickRoute(session, project, new Set(), prior?.connectionId ?? null);
+    // A new run may start on the chosen primary even before its sign-in is confirmed (R8).
+    const pick = this.pickRoute(session, project, new Set(), prior?.connectionId ?? null, true);
     if (!pick.route) {
       this.transition(runId, 'paused_auth', `No eligible provider route: ${pick.reasons.join('; ')}`);
       return;
@@ -437,7 +459,8 @@ export class RelayController {
       return {
         route,
         authenticated: !!a && (a.isMock || status?.auth === 'authenticated'),
-        billing: (a?.isMock ? 'subscription' : (status?.billing ?? 'unknown')) as RouteCandidate['billing'],
+        authUnknown: !!a && !a.isMock && status?.auth === 'unknown',
+        billing: (status?.billing ?? (a?.isMock ? 'subscription' : 'unknown')) as RouteCandidate['billing'],
         modelAvailable: !!a && (a.isMock || !status || status.models.length === 0 || status.models.includes(route.modelId)),
         coolingDownUntil: this.cooldowns.get(routeKey(route)) ?? null,
         isMock: a?.isMock ?? false,
@@ -446,11 +469,21 @@ export class RelayController {
     });
   }
 
-  private pickRoute(session: Session, project: Project | null, tried: Set<string>, currentConnectionId: string | null) {
+  // R8: a completed real attempt proves the provider's sign-in works.
+  private confirmSignIn(connectionId: string): void {
+    const cached = this.store.getSetting<ConnCache | null>(`conn:${connectionId}`, null);
+    if (cached?.auth !== 'unknown') return;
+    this.store.setSetting(`conn:${connectionId}`, { ...cached, auth: 'authenticated', confirmedByRun: true, connection: cached.connection ? confirmedConnection(cached.connection) : cached.connection });
+  }
+
+  private pickRoute(session: Session, project: Project | null, tried: Set<string>, currentConnectionId: string | null, allowUnknownAuthForFirst = false) {
     const consent = project ? project.crossProviderConsent : this.store.getSetting<boolean>('chat.crossProviderConsent', false);
     const allowMock = session.mode === 'mock';
     const cands = this.candidates(session).filter((c) => c.isMock === allowMock);
-    return selectNextRoute({ config: session.fallback, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock });
+    // Disabling a provider reaches existing sessions too: honour both the session's own list and the global setting.
+    const globalOff = this.store.getSetting<{ disabledConnections?: string[] } | null>('fallback', null)?.disabledConnections ?? [];
+    const config = { ...session.fallback, disabledConnections: [...new Set([...(session.fallback.disabledConnections ?? []), ...globalOff])] };
+    return selectNextRoute({ config, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock, allowUnknownAuthForFirst });
   }
 
   private budgetFor(route: RouteRef) {
@@ -480,6 +513,7 @@ export class RelayController {
       let resume = start.resume ?? null;
       const tried = start.tried;
       let throttleRetries = 0;
+      let transportRetries = 0;
       let contextRetries = 0;
 
       for (;;) {
@@ -500,7 +534,7 @@ export class RelayController {
           startedAt: new Date().toISOString(),
           endedAt: null,
           termination: null,
-          retryCount: throttleRetries,
+          retryCount: throttleRetries + transportRetries,
         };
         this.store.insertAttempt(attempt);
         this.store.updateRun(runId, { activeAttemptId: attempt.id });
@@ -517,10 +551,12 @@ export class RelayController {
           prompt,
           permissionProfile: project ? project.permissionProfile : 'chat',
           resumeProviderSessionId: resume && resume.connectionId === route.connectionId ? resume.providerSessionId : null,
-        });
+          projectId: project?.id ?? null,
+        }, session.fallback.attemptTimeoutMs ?? DEFAULT_FALLBACK.attemptTimeoutMs);
 
         if (active.cancelRequested) return this.cancel(runId);
         if (outcome.termination === 'completed') {
+          if (!adapter.isMock) this.confirmSignIn(route.connectionId);
           this.transition(runId, 'completed', null);
           this.store.clearTransitionIntent(runId);
           return;
@@ -529,12 +565,14 @@ export class RelayController {
         if (LIMIT_KINDS.has(failure.kind)) this.emit(session.id, runId, attempt.id, 'limit.observed', { failure });
         if (failure.kind === 'usage_limit' && failure.resetAt) this.cooldowns.set(routeKey(route), Date.parse(failure.resetAt));
 
-        const decision = decide(failure, { config: session.fallback, throttleRetries, contextRetries, random: this.random });
+        const unresolvedTools = this.store.toolActionsForRun(runId).some((t) => t.attemptId === attempt.id && (t.status === 'unknown' || t.status === 'started'));
+        const decision = decide(failure, { config: session.fallback, throttleRetries, transportRetries, contextRetries, unresolvedTools, random: this.random });
         if (decision.action === 'retry_same') {
-          throttleRetries++;
+          if (failure.kind === 'transport') transportRetries++;
+          else throttleRetries++;
           this.emit(session.id, runId, attempt.id, 'diagnostic', { level: 'warn', message: `${decision.reason} in ${decision.delayMs} ms` });
           await this.clock.sleep(decision.delayMs);
-          if (this.store.toolActionsForRun(runId).length) prompt = buildHandoff(this.checkpoint(this.store.getRun(runId)!, session, project, attempt, 'Retry after throttle'), this.budgetFor(route)).prompt;
+          if (this.store.toolActionsForRun(runId).length) prompt = buildHandoff(this.checkpoint(this.store.getRun(runId)!, session, project, attempt, failure.kind === 'transport' ? 'Retry after lost connection' : 'Retry after throttle'), this.budgetFor(route)).prompt;
           parentAttemptId = attempt.id;
           continue;
         }
@@ -558,7 +596,8 @@ export class RelayController {
           return;
         }
         const run = this.store.getRun(runId)!;
-        const cp = this.checkpoint(run, session, project, attempt, decision.reason);
+        const preview = this.pickRoute(session, project, new Set([...tried, routeKey(route)]), route.connectionId).route;
+        const cp = this.checkpoint(run, session, project, attempt, decision.reason, { nextRoute: preview, category: categoryOf(failure.kind) });
         const uncertain = cp.unresolvedActions.filter((a) => a.risk === 'external-side-effect' || a.risk === 'unknown');
         if (uncertain.length) {
           this.transition(runId, 'paused_uncertain', `Work paused: confirm the outcome of ${uncertain.map((u) => `“${u.argsPreview}”`).join(', ')} before continuing.`);
@@ -589,6 +628,7 @@ export class RelayController {
         prompt = handoff.prompt;
         parentAttemptId = attempt.id;
         throttleRetries = 0;
+        transportRetries = 0;
       }
     } finally {
       if (project) this.leases.release(project.root, leaseOwner);
@@ -601,13 +641,29 @@ export class RelayController {
     this.store.clearTransitionIntent(runId);
   }
 
-  private async runAttempt(active: ActiveRun, adapter: ProviderAdapter, attempt: Attempt, input: Parameters<ProviderAdapter['startAttempt']>[0]): Promise<AttemptOutcome> {
+  private async runAttempt(active: ActiveRun, adapter: ProviderAdapter, attempt: Attempt, input: Parameters<ProviderAdapter['startAttempt']>[0], timeoutMs: number): Promise<AttemptOutcome> {
     const sessionId = active.sessionId;
     const runId = active.runId;
     const handle = adapter.startAttempt(input);
     active.handle = handle;
     if (handle.pgid) this.store.setSetting(`proc:${attempt.id}`, handle.pgid);
     if (active.cancelRequested) void handle.interrupt('user stop');
+    // The runner's own deadline: stop the attempt like an interrupt, then record a timeout.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void handle.interrupt('attempt timeout');
+    }, Math.min(timeoutMs, MAX_TIMER_MS));
+    try {
+      return await this.collectAttempt(active, attempt, handle, () => timedOut, timeoutMs);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async collectAttempt(active: ActiveRun, attempt: Attempt, handle: AttemptHandle, timedOut: () => boolean, timeoutMs: number): Promise<AttemptOutcome> {
+    const sessionId = active.sessionId;
+    const runId = active.runId;
     const partial = new Map<string, { id: string; text: string }>();
     const tag = () => {
       const a = this.store.getAttempt(attempt.id)!;
@@ -627,7 +683,14 @@ export class RelayController {
       if (raw.providerEventId && this.store.seenProviderEvent(attempt.id, raw.providerEventId)) continue;
       this.applyAdapterEvent(sessionId, runId, attempt, raw, partial, tag);
     }
-    const outcome = await handle.done;
+    let outcome = await handle.done;
+    if (timedOut() && outcome.termination !== 'completed' && !active.cancelRequested) {
+      outcome = {
+        ...outcome,
+        termination: 'interrupted',
+        failure: { kind: 'timeout', message: `no result within ${timeoutMs} ms`, evidence: 'runner:attemptTimeoutMs', retryAfterMs: null, resetAt: null, scope: null, simulated: false },
+      };
+    }
     for (const [, p] of partial) this.emit(sessionId, runId, attempt.id, 'message.interrupted', { ...tag(), messageId: p.id, text: p.text, reason: outcome.termination });
     // Tool calls that never reported a result are now unknown — never assumed complete.
     for (const t of this.store.toolActionsForRun(runId).filter((t) => t.attemptId === attempt.id && t.status === 'started')) {
@@ -755,7 +818,7 @@ export class RelayController {
   }
 
   // Deterministic, evidence-based checkpoint (spec §10). Never asks the model to summarize.
-  checkpoint(run: Run, session: Session, project: Project | null, attempt: Attempt | null, reason: string): Checkpoint {
+  checkpoint(run: Run, session: Session, project: Project | null, attempt: Attempt | null, reason: string, extra: { nextRoute?: RouteRef | null; category?: ProviderErrorCategory | null } = {}): Checkpoint {
     const events = this.store.listEvents(session.id);
     const actions = this.store.toolActionsForRun(run.id);
     const userMsgs = events.filter((e) => e.type === 'user.message').map((e) => (e.payload as EventPayload<'user.message'>).text);
@@ -767,6 +830,14 @@ export class RelayController {
         const p = e.payload as EventPayload<'message.completed'>;
         return { role: 'assistant' as const, provider: p.connectionId, model: p.model, text: clip(p.text), interrupted: e.type === 'message.interrupted' };
       });
+    // Denials the adapter marked as unapplied proposals (structured prefix, not model prose).
+    const proposed = new Set(
+      events
+        .filter((e) => e.type === 'tool.denied' && e.runId === run.id && (e.payload as EventPayload<'tool.denied'>).message.startsWith(PROPOSED_ONLY_PREFIX))
+        .map((e) => (e.payload as EventPayload<'tool.denied'>).operationId),
+    );
+    const failedMessages = events.filter((e) => e.type === 'tool.failed' && e.runId === run.id).map((e) => redact((e.payload as EventPayload<'tool.failed'>).message));
+    const testEvidence = actions.filter((a) => a.status === 'completed' && isTestRun(a.name, a.argsPreview)).map((a) => `${a.name}: ${a.argsPreview}`);
     let manifest: Checkpoint['fileManifest'] = [];
     let changes: Checkpoint['changedFiles'] = [];
     let diff = '';
@@ -774,7 +845,7 @@ export class RelayController {
     if (project) {
       manifest = buildManifest(project.root, { exclusions: project.contextExclusions });
       changes = diffManifests(baseline?.manifest ?? [], manifest);
-      diff = workspaceDiff(project.root, changes);
+      diff = workspaceDiff(project.root, changes, undefined, project.contextExclusions);
     }
     const bindings: Record<string, string> = {};
     for (const a of this.store.attemptsForRun(run.id)) if (a.providerSessionId) bindings[a.connectionId] = a.providerSessionId;
@@ -785,20 +856,28 @@ export class RelayController {
       objective: session.objective || userMsgs[0] || '',
       latestUserConstraints: userMsgs.slice(1).slice(-5),
       completedSteps: actions.filter((a) => a.status === 'completed').map((a) => `${a.name}: ${a.argsPreview}`),
-      pendingSteps: ['Continue the objective from where the previous agent stopped'],
-      decisionNotes: actions.filter((a) => a.status === 'denied').map((a) => `User denied: ${a.name} ${a.argsPreview} — do not retry it`),
+      pendingSteps: [
+        ...actions.filter((a) => a.status === 'denied' && proposed.has(a.operationId)).map((a) => `Not applied (Cursor proposed it, edits were off): ${a.name} ${a.argsPreview} — make this change if it is still needed`),
+        'Continue the objective from where the previous agent stopped',
+      ],
+      decisionNotes: actions.filter((a) => a.status === 'denied' && !proposed.has(a.operationId)).map((a) => `User denied: ${a.name} ${a.argsPreview} — do not retry it`),
       recentMessages: recent,
       baselineCommit: baseline?.head ?? null,
       fileManifest: manifest,
       changedFiles: changes,
       diff,
-      testEvidence: [],
+      testEvidence,
       providerBindings: bindings,
       unresolvedActions: actions
         .filter((a) => a.status === 'unknown' || a.status === 'started')
         .map((a) => ({ operationId: a.operationId, name: a.name, argsPreview: a.argsPreview, risk: a.risk, status: a.status })),
       permissionVersion: project?.permissionVersion ?? 0,
       switchReason: reason,
+      nextRoute: extra.nextRoute ?? null,
+      handoffCategory: extra.category ?? null,
+      gitStatus: project ? gitStatusLines(project.root).map(redact) : [],
+      knownErrors: failedMessages.slice(-10),
+      permissionProfile: project?.permissionProfile ?? null,
       previousProvider: attempt ? { connectionId: attempt.connectionId, model: attempt.effectiveModel ?? attempt.requestedModel } : null,
       createdAtSeq: this.store.latestSeq(session.id),
       createdAt: new Date().toISOString(),
@@ -809,6 +888,13 @@ export class RelayController {
     this.emit(session.id, run.id, attempt?.id ?? null, 'checkpoint.created', { checkpointId: cp.id, contentHash: cp.contentHash, changedFiles: changes.length, omitted: [] });
     return cp;
   }
+}
+
+const TEST_COMMAND = /\b(test|vitest|jest|pytest|cargo test|go test|mocha)\b/;
+// A shell action counts as a test run when it is a recognised command and names a test runner.
+function isTestRun(name: string, argsPreview: string): boolean {
+  if (!/^(bash|shell)$/i.test(name)) return false;
+  return classifyShellCommand(argsPreview) !== 'external-side-effect' && TEST_COMMAND.test(argsPreview);
 }
 
 const ADAPTER_EVENT_TYPES = new Set([
@@ -843,6 +929,20 @@ function isValidAdapterEvent(e: AdapterEventEnvelope): boolean {
     default:
       return true;
   }
+}
+
+// Cached connection status (`conn:<id>`); route eligibility reads it.
+interface ConnCache {
+  auth: string;
+  billing: string;
+  models: string[];
+  connection?: Connection;
+  // R8: set once a real attempt on this connection completed while its sign-in was 'unknown'.
+  confirmedByRun?: boolean;
+}
+
+function confirmedConnection(c: Connection): Connection {
+  return { ...c, authStatus: 'authenticated', limitations: [...c.limitations.filter((l) => !/^Sign-in is confirmed by/.test(l)), 'Sign-in confirmed by a successful run'] };
 }
 
 function previewArgs(name: string, args: unknown): string {

@@ -20,6 +20,9 @@ importers:
       '@wots/adapter-codex':
         specifier: workspace:*
         version: link:packages/adapters/codex
+      '@wots/adapter-cursor':
+        specifier: workspace:*
+        version: link:packages/adapters/cursor
       '@wots/adapter-mock':
         specifier: workspace:*
         version: link:packages/adapters/mock
@@ -156,6 +159,9 @@ importers:
       '@wots/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapters/codex
+      '@wots/adapter-cursor':
+        specifier: workspace:*
+        version: link:../../packages/adapters/cursor
       '@wots/adapter-mock':
         specifier: workspace:*
         version: link:../../packages/adapters/mock
@@ -201,6 +207,18 @@ importers:
         version: link:../../security
 
   packages/adapters/codex:
+    dependencies:
+      '@wots/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@wots/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@wots/security':
+        specifier: workspace:*
+        version: link:../../security
+
+  packages/adapters/cursor:
     dependencies:
       '@wots/core':
         specifier: workspace:*
