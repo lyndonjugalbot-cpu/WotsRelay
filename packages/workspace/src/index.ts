@@ -116,7 +116,10 @@ export function gitStatusLines(root: string, max = 200): string[] {
 }
 
 // Text diff of changed files against the git baseline when available; otherwise a manifest summary.
-export function workspaceDiff(root: string, changes: FileChange[], maxBytes = 60_000): string {
+export function workspaceDiff(root: string, allChanges: FileChange[], maxBytes = 60_000, extraExclusions: readonly string[] = []): string {
+  // Defence in depth: secret-pattern paths never contribute diff content, whatever the caller passed.
+  const exclusions = [...DEFAULT_SECRET_PATH_PATTERNS, ...extraExclusions];
+  const changes = allChanges.filter((c) => !matchesAny(c.path, exclusions));
   const base = gitBaseline(root);
   if (base.isRepo && base.head) {
     const d = git(root, ['diff', '--no-color', base.head, '--', ...changes.map((c) => c.path)]) ?? '';

@@ -822,7 +822,7 @@ export class RelayController {
     if (project) {
       manifest = buildManifest(project.root, { exclusions: project.contextExclusions });
       changes = diffManifests(baseline?.manifest ?? [], manifest);
-      diff = workspaceDiff(project.root, changes);
+      diff = workspaceDiff(project.root, changes, undefined, project.contextExclusions);
     }
     const bindings: Record<string, string> = {};
     for (const a of this.store.attemptsForRun(run.id)) if (a.providerSessionId) bindings[a.connectionId] = a.providerSessionId;

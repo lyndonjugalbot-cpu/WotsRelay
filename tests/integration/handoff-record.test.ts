@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MockAdapter } from '@wots/adapter-mock';
 import { containsSecret } from '@wots/security';
+import { workspaceDiff } from '@wots/workspace';
 import { MOBILE_METHODS } from '../../apps/runner/src/server/gateway.ts';
 import { buildHandoff } from '@wots/context';
 import { handoffViewFor } from '../../apps/runner/src/sessions/handoffView.ts';
@@ -87,5 +88,39 @@ describe('inspectable handoff record', () => {
     const stateEvent = h.events.filter((e) => e.type === 'run.stateChanged').at(-1)!.payload as { reason: string };
     expect(stateEvent.reason).toContain(`${first}: disabled by user`);
     expect(stateEvent.reason).toContain(`${second}: disabled by user`);
+  });
+});
+
+describe('tracked secret files', () => {
+  it('never put a modified tracked .env value in the diff, the next prompt or handoff.get', async () => {
+    const OLD = 'api_key=oldsecretvalue1234567890';
+    const NEW = 'api_key=newsecretvalue0987654321';
+    const repo = tempRepo({ 'README.md': '# demo\n', '.env': `${OLD}\n`, 'id_rsa.txt': 'x\n' });
+    const a = new MockAdapter({
+      connectionId: 'mock-claude', label: 'a', models: ['claude-opus-5-5'],
+      script: () => [{ kind: 'write', path: '.env', content: `${NEW}\n` }, { kind: 'write', path: 'src/ok.ts', content: 'export {};\n' }, { kind: 'fail', failure: quota }],
+    });
+    const b = new MockAdapter({ connectionId: 'mock-codex', label: 'b', models: ['gpt-6-astra'], script: () => [{ kind: 'text', text: 'ok' }] });
+    const h = harness('success', { adapters: [a, b], repo });
+    const { session } = await runOnce(h);
+    const cp = h.store.latestCheckpoint(session.id)!;
+    const view = JSON.stringify(handoffViewFor(h.store, session.id));
+    for (const text of [cp.diff, b.prompts[0]!, view, JSON.stringify(cp)]) {
+      expect(text).not.toContain('oldsecretvalue');
+      expect(text).not.toContain('newsecretvalue');
+    }
+    expect(cp.diff).toContain('src/ok.ts');
+    expect(cp.gitStatus.some((l) => l.endsWith(' .env'))).toBe(true);
+  });
+});
+
+describe('workspaceDiff', () => {
+  it('drops secret-pattern paths even when a caller passes them', () => {
+    const repo = tempRepo({ '.env': 'api_key=oldsecretvalue1234567890\n', 'a.ts': '1\n' });
+    writeFileSync(join(repo, '.env'), 'api_key=newsecretvalue0987654321\n');
+    writeFileSync(join(repo, 'a.ts'), '2\n');
+    const d = workspaceDiff(repo, [{ path: '.env', change: 'modified', sha256: 'x' }, { path: 'a.ts', change: 'modified', sha256: 'y' }]);
+    expect(d).not.toContain('secretvalue');
+    expect(d).toContain('a.ts');
   });
 });
