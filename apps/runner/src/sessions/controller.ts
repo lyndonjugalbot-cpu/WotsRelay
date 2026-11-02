@@ -33,6 +33,7 @@ import {
   type ProviderAdapter,
   type RouteCandidate,
   type UsageWindow,
+  PROPOSED_ONLY_PREFIX,
 } from '@wots/core';
 import type { Store } from '@wots/storage';
 import { buildHandoff, DEFAULT_BUDGET } from '@wots/context';
@@ -829,6 +830,12 @@ export class RelayController {
         const p = e.payload as EventPayload<'message.completed'>;
         return { role: 'assistant' as const, provider: p.connectionId, model: p.model, text: clip(p.text), interrupted: e.type === 'message.interrupted' };
       });
+    // Denials the adapter marked as unapplied proposals (structured prefix, not model prose).
+    const proposed = new Set(
+      events
+        .filter((e) => e.type === 'tool.denied' && e.runId === run.id && (e.payload as EventPayload<'tool.denied'>).message.startsWith(PROPOSED_ONLY_PREFIX))
+        .map((e) => (e.payload as EventPayload<'tool.denied'>).operationId),
+    );
     const failedMessages = events.filter((e) => e.type === 'tool.failed' && e.runId === run.id).map((e) => redact((e.payload as EventPayload<'tool.failed'>).message));
     const testEvidence = actions.filter((a) => a.status === 'completed' && isTestRun(a.name, a.argsPreview)).map((a) => `${a.name}: ${a.argsPreview}`);
     let manifest: Checkpoint['fileManifest'] = [];
@@ -849,8 +856,11 @@ export class RelayController {
       objective: session.objective || userMsgs[0] || '',
       latestUserConstraints: userMsgs.slice(1).slice(-5),
       completedSteps: actions.filter((a) => a.status === 'completed').map((a) => `${a.name}: ${a.argsPreview}`),
-      pendingSteps: ['Continue the objective from where the previous agent stopped'],
-      decisionNotes: actions.filter((a) => a.status === 'denied').map((a) => `User denied: ${a.name} ${a.argsPreview} — do not retry it`),
+      pendingSteps: [
+        ...actions.filter((a) => a.status === 'denied' && proposed.has(a.operationId)).map((a) => `Not applied (Cursor proposed it, edits were off): ${a.name} ${a.argsPreview} — make this change if it is still needed`),
+        'Continue the objective from where the previous agent stopped',
+      ],
+      decisionNotes: actions.filter((a) => a.status === 'denied' && !proposed.has(a.operationId)).map((a) => `User denied: ${a.name} ${a.argsPreview} — do not retry it`),
       recentMessages: recent,
       baselineCommit: baseline?.head ?? null,
       fileManifest: manifest,

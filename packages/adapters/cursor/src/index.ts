@@ -6,6 +6,7 @@
 import { mkdirSync } from 'node:fs';
 import {
   EventChannel,
+  PROPOSED_ONLY_PREFIX,
   execVersion,
   lineReader,
   resolveExecutable,
@@ -141,7 +142,7 @@ export function newCursorStreamState(opts: { applyEdits?: boolean } = {}): Curso
   return { sessionId: null, sawResult: false, resultIsError: false, segment: 0, segmentText: '', sawDelta: false, applyEdits: opts.applyEdits ?? false, stderrTail: '' };
 }
 
-export const PROPOSED_ONLY = 'Proposed only — Cursor did not apply this change (edits are off for this project)';
+export const PROPOSED_ONLY = `${PROPOSED_ONLY_PREFIX} — Cursor did not apply this change (edits are off for this project)`;
 const EDIT_TOOLS = new Set(['Write', 'Edit']);
 
 function textOf(msg: Json): string {

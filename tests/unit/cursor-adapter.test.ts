@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AdapterEventEnvelope, AttemptInput, AttemptOutcome, CaptureEntry, ProviderAdapter } from '@wots/core';
 import { MockAdapter } from '@wots/adapter-mock';
+import { buildHandoff } from '@wots/context';
 import type { FallbackConfig } from '@wots/protocol';
 import { CursorAdapter, buildCursorArgs, classifyCursorExit, newCursorStreamState, resolveCursorExecutable, translateCursorLine } from '@wots/adapter-cursor';
 import { harness, tempDir } from '../helpers.ts';
@@ -182,6 +183,24 @@ describe('Cursor sign-in confirmation (R8)', () => {
 });
 
 describe('Cursor adapter (controller)', () => {
+  it('a proposals-only write reaches the next provider as pending work, not as a user denial', async () => {
+    const h = harness('success', { adapters: [new CursorAdapter({ executable: replayExecutable('code-exit-no-result.jsonl'), chatSandboxDir: tempDir('wsb-'), env })] });
+    await h.relay.refreshConnections();
+    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { ...REAL, routes: [{ connectionId: 'cursor', modelId: 'default' }] } });
+    const run = await h.relay.waitForRun(h.relay.sendMessage({ sessionId: s.id, text: 'Write notes', idempotencyKey: 'cursor-proposal-1' }).runId);
+    expect(run.state).toBe('paused_uncertain');
+    expect(h.store.toolActionsForRun(run.id).map((t) => [t.name, t.status])).toEqual([['Write', 'denied']]);
+    // The timeline still shows why the write did not happen.
+    expect(h.events.filter((e) => e.type === 'tool.denied').map((e) => (e.payload as { message: string }).message)).toEqual(['Proposed only — Cursor did not apply this change (edits are off for this project)']);
+    const cp = h.store.latestCheckpoint(s.id)!;
+    expect(cp.decisionNotes.join('\n')).not.toContain('notes/a.txt');
+    expect(cp.pendingSteps).toContain('Not applied (Cursor proposed it, edits were off): Write notes/a.txt — make this change if it is still needed');
+    expect(cp.completedSteps).toEqual([]);
+    const prompt = buildHandoff(cp).prompt;
+    expect(prompt).toContain('Not applied (Cursor proposed it, edits were off): Write notes/a.txt');
+    expect(prompt).not.toContain('do not retry');
+  });
+
   it('exit 1 with no result pauses the run as unknown and journals the edit', async () => {
     const cursor = new CursorAdapter({ executable: replayExecutable('code-exit-no-result.jsonl'), chatSandboxDir: tempDir('wsb-'), env, applyEdits: () => true });
     // Stands in for Cursor's write landing on disk (the replayer only plays the stream).

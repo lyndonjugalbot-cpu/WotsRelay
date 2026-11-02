@@ -30,6 +30,11 @@ export type AdapterEvent =
 
 export type AdapterEventEnvelope = AdapterEvent & { providerEventId?: string };
 
+// Start of a `tool.denied` message meaning "the provider proposed this change but did not apply
+// it" (edits switched off), as opposed to a user or permission denial. Handoffs treat it as
+// pending work, never as "do not retry".
+export const PROPOSED_ONLY_PREFIX = 'Proposed only';
+
 export interface AttemptInput {
   attemptId: string;
   cwd: string | null;
