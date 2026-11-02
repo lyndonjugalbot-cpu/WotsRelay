@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WotsRelay User Guide</title>
+<style>
+  @page { size: A4; margin: 18mm 17mm 20mm; }
+  :root {
+    --ink: #1b2433; --graphite: #5a6577; --hairline: #d5dbe2; --surface: #f8fafb; --ground: #edf0f3;
+    --laneA: #2b5bd7; --laneB: #0b8a80; --paused: #a86a00; --failed: #b4322a; --ok: #2e7d4f; --night: #141c2c;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; font: 10.5pt/1.55 -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+  h1, h2, h3 { line-height: 1.2; letter-spacing: -0.01em; }
+  h2 { font-size: 19pt; margin: 0 0 10px; padding-top: 2px; break-after: avoid; }
+  h3 { font-size: 12.5pt; margin: 18px 0 6px; break-after: avoid; }
+  p { margin: 0 0 9px; }
+  ul, ol { margin: 0 0 10px; padding-left: 20px; }
+  li { margin: 0 0 4px; }
+  code, .mono { font-family: "SF Mono", Menlo, monospace; font-size: 9.2pt; }
+  p code, li code, td code { background: var(--surface); border: 1px solid var(--hairline); border-radius: 4px; padding: 0 4px; }
+  section { break-before: page; }
+  .lead { font-size: 11.5pt; color: var(--graphite); }
+  .muted { color: var(--graphite); }
+  .term { background: var(--night); color: #e6ebf2; border-radius: 10px; padding: 12px 14px; margin: 8px 0 12px; white-space: pre-wrap; font-family: "SF Mono", Menlo, monospace; font-size: 8.8pt; line-height: 1.5; break-inside: avoid; }
+  .term .p { color: #9fb4ff; } .term .c { color: #97a3b6; } .term .y { color: #e3a53c; } .term .g { color: #6bcb91; } .term .a { color: #7c9dff; } .term .b { color: #3cc2b5; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 12px; break-inside: avoid; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--hairline); }
+  th { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.04em; color: var(--graphite); font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .note, .warn, .tip { border-radius: 8px; padding: 9px 12px; margin: 10px 0 12px; break-inside: avoid; }
+  .note { background: #eef3ff; border-left: 4px solid var(--laneA); }
+  .tip { background: #e9f6f4; border-left: 4px solid var(--laneB); }
+  .warn { background: #fdf4e6; border-left: 4px solid var(--paused); }
+  .note b, .tip b, .warn b { display: block; margin-bottom: 2px; }
+  figure { margin: 10px 0 14px; break-inside: avoid; }
+  figure img { display: block; max-width: 100%; border: 1px solid var(--hairline); border-radius: 8px; }
+  figcaption { font-size: 9pt; color: var(--graphite); margin-top: 5px; }
+  .phones { display: flex; gap: 16px; align-items: flex-start; }
+  .phones figure { flex: 1; }
+  .phones img { border-radius: 18px; }
+  .steps { counter-reset: s; list-style: none; padding: 0; }
+  .steps > li { counter-increment: s; position: relative; padding-left: 34px; margin-bottom: 10px; }
+  .steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 9pt; font-weight: 700; display: grid; place-items: center; }
+  .cover { height: 250mm; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+  .cover img { width: 92mm; margin-bottom: 18mm; }
+  .cover h1 { font-size: 30pt; margin: 0 0 8px; }
+  .cover p { color: var(--graphite); font-size: 12pt; margin: 0 0 4px; }
+  .toc { columns: 1; padding: 0; list-style: none; }
+  .toc li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--hairline); font-size: 11pt; }
+  .toc .n { width: 22px; color: var(--graphite); font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 8.5pt; font-weight: 600; border: 1px solid currentColor; }
+  .chip.a { color: var(--laneA); } .chip.b { color: var(--laneB); } .chip.soon { color: var(--paused); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <img src="../assets/logo.svg" alt="WotsRelay">
+  <h1>User Guide</h1>
+  <p>One workspace across Claude Code and Codex, on your Mac, your terminal and your iPhone.</p>
+  <p class="muted" style="margin-top:14px;font-size:10pt">Version 0.1 · November 2026</p>
+</div>
+
+<section>
+  <h2>Contents</h2>
+  <ul class="toc">
+    <li><span class="n">1</span>What WotsRelay does</li>
+    <li><span class="n">2</span>Before you start</li>
+    <li><span class="n">3</span>Install it once</li>
+    <li><span class="n">4</span>Your first session</li>
+    <li><span class="n">5</span>Working in a session</li>
+    <li><span class="n">6</span>Models and automatic switching</li>
+    <li><span class="n">7</span>When a reply pauses</li>
+    <li><span class="n">8</span>The desktop app</li>
+    <li><span class="n">9</span>The iPhone app</li>
+    <li><span class="n">10</span>Command reference</li>
+    <li><span class="n">11</span>Privacy and safety</li>
+    <li><span class="n">12</span>Troubleshooting</li>
+    <li><span class="n">13</span>What’s coming next</li>
+  </ul>
+</section>
+
+<section>
+  <h2>1 · What WotsRelay does</h2>
+  <p class="lead">WotsRelay lets you work with Claude and Codex as if they were one assistant. You talk to it like you would to <code>claude</code> or <code>codex</code> in a terminal, and when one provider is about to run out of its usage limit, the conversation continues on the other one, with everything it needs to pick up where it left off.</p>
+  <ul>
+    <li><b>Claude Opus 5.5 is your default model.</b> GPT-6 Astra (through Codex) is the fallback. You can pick any other Claude or Codex model at any time.</li>
+    <li><b>It switches before you hit the wall.</b> When a provider reports that 95% of its 5-hour or weekly limit is used, your next message goes to the other model, and switches back once the limit resets.</li>
+    <li><b>Nothing is lost when it switches.</b> The next model receives the conversation so far, the files that changed and what was already done, so it doesn’t repeat work.</li>
+    <li><b>Work keeps going on your Mac.</b> A small background service (the <i>runner</i>) does the work. The terminal, the desktop app and the iPhone app are just windows onto it.</li>
+    <li><b>It uses your existing subscriptions.</b> WotsRelay drives the official <code>claude</code> and <code>codex</code> tools you’re already signed into. It never asks for or stores your passwords.</li>
+  </ul>
+  <div class="note"><b>Every reply is labelled.</b> Each answer shows which model wrote it, so you always know whether Claude or Codex is speaking.</div>
+</section>
+
+<section>
+  <h2>2 · Before you start</h2>
+  <table>
+    <tr><th>You need</th><th>Check with</th></tr>
+    <tr><td>A Mac with Apple silicon</td><td>—</td></tr>
+    <tr><td>Node.js 26 or newer and pnpm 11</td><td><code>node --version</code> · <code>pnpm --version</code></td></tr>
+    <tr><td>Claude Code, signed in</td><td><code>claude auth status</code> (sign in with <code>claude auth login</code>)</td></tr>
+    <tr><td>Codex CLI, signed in</td><td><code>codex login status</code> (sign in with <code>codex login</code>)</td></tr>
+    <tr><td>For the iPhone app: Xcode</td><td>Only needed to build the app yourself</td></tr>
+  </table>
+  <div class="tip"><b>Sign in with the official tools.</b> WotsRelay never handles your Claude or ChatGPT passwords. If either tool says you’re signed out, sign in with its own command, then come back.</div>
+</section>
+
+<section>
+  <h2>3 · Install it once</h2>
+  <ol class="steps">
+    <li><b>Get the code and install it.</b>
+      <div class="term">cd ~/dev
+git clone https://github.com/lyndonjugalbot-cpu/WotsRelay.git WotsAI
+cd WotsAI
+pnpm install</div></li>
+    <li><b>Put <code>wots</code> on your PATH</b> so you can run it from any folder. Run this from inside the project folder:
+      <div class="term">mkdir -p ~/.local/bin &amp;&amp; ln -sfn "$(pwd)/apps/cli/bin/wots" ~/.local/bin/wots</div>
+      If your terminal then says <code>command not found: wots</code>, add <code>~/.local/bin</code> to your PATH once:
+      <div class="term">echo 'export PATH="$HOME/.local/bin:$PATH"' &gt;&gt; ~/.zshrc &amp;&amp; source ~/.zshrc</div></li>
+    <li><b>Check that everything is ready.</b>
+      <div class="term"><span class="p">$</span> wots doctor
+<span class="g">●</span> claude-code  2.1.316  auth=authenticated  billing=subscription
+<span class="g">●</span> codex  0.166.0  auth=authenticated  billing=subscription
+<span class="g">●</span> no billing-changing environment variables detected</div>
+      Both providers should say <code>auth=authenticated</code> and <code>billing=subscription</code>.</li>
+  </ol>
+  <div class="warn"><b>Billing check.</b> If <code>wots doctor</code> warns about variables such as <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code>, those would make the tools bill an API account instead of your subscription. WotsRelay refuses to run a provider while such a variable is set, unless you deliberately allow API billing.</div>
+</section>
+
+<section>
+  <h2>4 · Your first session</h2>
+  <p>Open a terminal <b>inside the project folder you want to work on</b> and type:</p>
+  <div class="term"><span class="p">$</span> cd ~/dev/my-project
+<span class="p">$</span> wots</div>
+  <p>The first time in a folder, WotsRelay asks whether you trust it. Use the arrow keys and Enter:</p>
+  <div class="term">Do you trust the files in this folder?
+  ~/dev/my-project
+  Claude and Codex will be able to read and edit files and run commands here.
+<span class="a">❯</span> 1. Yes, trust this folder
+  2. No, chat only (no file access)</div>
+  <ul>
+    <li><b>Yes</b> lets the models read and edit files and run commands in that folder (risky commands still ask you first).</li>
+    <li><b>No, chat only</b> gives you a conversation with no file access at all.</li>
+    <li>In your home folder WotsRelay always uses chat only. Run it inside a project folder to work on code.</li>
+  </ul>
+  <p>Then you see the session banner and a prompt:</p>
+  <div class="term"><span class="y">✻ WotsRelay</span>  Claude Opus 5.5  <span class="c">→ fallback GPT-6-Astra</span>
+  ~/dev/my-project  <span class="g">edits allowed</span>
+<span class="c">  /model to switch models · /help for commands · Ctrl-C stops a reply</span>
+
+<span class="y">❯</span> Add a dark mode toggle to the settings page</div>
+  <p>Type what you want and press Enter. The reply streams in, labelled with the model that wrote it, and you can keep the conversation going: follow-up messages remember everything said so far.</p>
+  <div class="tip"><b>Start with a request directly.</b> <code>wots "fix the failing test"</code> opens the session and sends that message straight away. Piped input runs once and exits: <code>echo "summarize README.md" | wots</code>.</div>
+</section>
+
+<section>
+  <h2>5 · Working in a session</h2>
+  <h3>Commands inside a session</h3>
+  <table>
+    <tr><th>Type</th><th>What it does</th></tr>
+    <tr><td><code>/model</code></td><td>Pick any Claude or Codex model with the arrow keys. The other provider stays as the fallback, and your choice is saved as the default.</td></tr>
+    <tr><td><code>/model gpt-6-astra</code></td><td>Switch directly to a named model.</td></tr>
+    <tr><td><code>/new</code> (or <code>/clear</code>)</td><td>Start a fresh conversation.</td></tr>
+    <tr><td><code>/resume</code></td><td>Pick an earlier conversation in this folder and continue it.</td></tr>
+    <tr><td><code>/status</code></td><td>Current model, fallback, folder access, sign-in, and usage bars for each provider.</td></tr>
+    <tr><td><code>/help</code></td><td>List these commands.</td></tr>
+    <tr><td><code>/exit</code></td><td>Quit. Ctrl-D, or Ctrl-C twice on an empty prompt, also quits.</td></tr>
+  </table>
+  <h3>Keys</h3>
+  <table>
+    <tr><th>Key</th><th>What it does</th></tr>
+    <tr><td>Ctrl-C while a reply runs</td><td>Stops that reply. You stay in the session.</td></tr>
+    <tr><td>Ctrl-C on an empty prompt</td><td>Shows “press Ctrl-C again to exit”; press it again to quit.</td></tr>
+    <tr><td>↑ / ↓ at the prompt</td><td>Recall earlier messages.</td></tr>
+  </table>
+  <h3>Approvals</h3>
+  <p>When a model wants to do something that needs your permission, WotsRelay shows it in plain words and asks:</p>
+  <div class="term"><b>? Approval needed</b>  <span class="y">reaches outside this folder (network, deletion or system change)</span>
+  Run: curl -sI https://example.com
+<span class="c">  in ~/dev/my-project</span>
+Allow this?
+<span class="a">❯</span> 1. Approve once
+  2. Approve for this session   <span class="c">similar requests run without asking until the session ends</span>
+  3. Reject                      <span class="c">Esc also rejects</span></div>
+  <table>
+    <tr><th>Risk shown</th><th>Meaning</th></tr>
+    <tr><td><span class="chip" style="color:var(--ok)">only reads</span></td><td>Looks at files or status without changing anything.</td></tr>
+    <tr><td><span class="chip" style="color:var(--paused)">changes files in this folder</span></td><td>Creates or edits files inside your project.</td></tr>
+    <tr><td><span class="chip" style="color:var(--failed)">reaches outside this folder</span></td><td>Network access, deleting files, installing packages, pushing to git or changing the system.</td></tr>
+    <tr><td><span class="chip" style="color:var(--graphite)">not recognised</span></td><td>WotsRelay can’t tell what the command does. Read it before approving.</td></tr>
+  </table>
+  <p class="muted">“Approve for this session” is offered only when the provider supports it (Codex commands).</p>
+</section>
+
+<section>
+  <h2>6 · Models and automatic switching</h2>
+  <h3>Choosing a model</h3>
+  <p>Type <code>/model</code> in a session. Claude models: Opus 5.5 (default), Sonnet 5.5, Haiku 5.5. Codex models: the list your ChatGPT plan offers, including GPT-6 Astra. The model you pick goes first; the other provider stays as the fallback.</p>
+  <h3>Switching at 95%</h3>
+  <p>Claude and Codex both report how much of their <b>5-hour</b> and <b>weekly</b> limits you’ve used. WotsRelay watches those numbers:</p>
+  <ul>
+    <li>From <b>80%</b> you see a short heads-up after a reply, for example <i>“Claude Opus 5.5: 86% of the 5-hour limit used (resets 18:56). Switches to GPT-6 Astra at 95%.”</i></li>
+    <li>At <b>95%</b>, your <b>next message</b> goes to the other model, with the whole conversation. A reply that’s already running is never cut off.</li>
+    <li>When the limit <b>resets</b>, the next message goes back to your preferred model automatically.</li>
+  </ul>
+  <div class="term"><span class="y">⇄</span> claude-opus-5-5 is at 96% of its 5-hour limit, resets 06:56 PM. Continuing with gpt-6-astra on codex.</div>
+  <h3>See and change it</h3>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>/status</code> or <code>wots usage</code></td><td>Usage per provider and window, with reset times.</td></tr>
+    <tr><td><code>wots fallback threshold 90</code></td><td>Switch at 90% instead of 95% (allowed range 50–100).</td></tr>
+    <tr><td><code>wots fallback show</code></td><td>Current order, effort and whether automatic fallback is on.</td></tr>
+    <tr><td><code>wots fallback set claude-opus-5-5 gpt-6-astra</code></td><td>Set the order of models directly.</td></tr>
+  </table>
+  <div class="note"><b>Your permission comes first.</b> Moving a conversation to the other provider shares it with that provider. The first time that’s needed, WotsRelay asks: <i>“Send this conversation to GPT-6 Astra to continue?”</i> Choose “Yes, and allow it for this folder from now on”, or “No” to stay where you are.</div>
+</section>
+
+<section>
+  <h2>7 · When a reply pauses</h2>
+  <p>Sometimes a reply can’t continue on its own, for example when a provider actually hits its limit, loses its connection, or needs you to sign in again. Instead of failing, WotsRelay saves a checkpoint and asks what to do:</p>
+  <div class="term">The reply is paused. What next?
+<span class="a">❯</span> 1. Continue with GPT-6 Astra   <span class="c">picks up from the saved checkpoint</span>
+  2. Retry with Claude Opus 5.5
+  3. Leave it paused              <span class="c">type a new message or /resume later</span></div>
+  <ul>
+    <li><b>Continue with …</b> hands the task to the other model. It receives the goal, your latest instructions, what was completed, the files that changed and their diff, and is told not to repeat finished work.</li>
+    <li><b>Retry</b> tries the same model again (for example after you’ve signed in again in another terminal).</li>
+    <li><b>Leave it paused</b> keeps everything; you can come back later with <code>/resume</code>, from the desktop app or from your iPhone.</li>
+  </ul>
+  <div class="warn"><b>If a command’s outcome is unknown,</b> such as a deploy that may or may not have run, WotsRelay pauses rather than letting the next model run it again. Check the result yourself, then continue.</div>
+</section>
+
+<section>
+  <h2>8 · The desktop app</h2>
+  <p>The desktop app shows the same sessions as the terminal, with the relay status, a conversation view and an activity panel. It is currently a development build that you start from the project folder:</p>
+  <div class="term"><span class="p">$</span> pnpm desktop:build
+<span class="p">$</span> env -u ELECTRON_RUN_AS_NODE pnpm --filter @wots/desktop start</div>
+  <figure><img src="img/desktop.png" alt="WotsRelay desktop app"><figcaption>The desktop app: sessions on the left, the relay status under the logo, the conversation and the model order at the bottom.</figcaption></figure>
+  <ul>
+    <li>Closing the window doesn’t stop running work. The runner keeps going in the background.</li>
+    <li>The logo’s arrow sweeps again every time work is handed from one model to the other.</li>
+    <li>Settings (⌘,) shows provider sign-in, the fallback order and simulated demos you can try without using any quota.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>9 · The iPhone app</h2>
+  <p>The iPhone app lets you follow sessions, answer approvals and continue paused work while you’re away from your desk. The work itself still runs on your Mac, so the Mac must be awake.</p>
+  <h3>Build it (one time)</h3>
+  <div class="term"><span class="p">$</span> cd apps/mobile &amp;&amp; npm install
+<span class="p">$</span> npx expo run:ios        <span class="c"># builds and opens it in the iOS Simulator</span></div>
+  <p class="muted">Installing it on a physical iPhone needs your Apple developer signing set up in Xcode.</p>
+  <h3>Pair it with your Mac</h3>
+  <ol class="steps">
+    <li>On the Mac, turn on phone access: <code>wots gateway enable</code></li>
+    <li>Create a pairing link: <code>wots gateway pair</code>. It’s valid for 2 minutes and works once.</li>
+    <li>Open the link on the iPhone (AirDrop, Messages or Notes), or paste it into the app. It pairs automatically.</li>
+  </ol>
+  <div class="phones">
+    <figure><img src="img/phone-sessions.png" alt="Session list"><figcaption>Session list with usage bars. Sessions waiting for you come first.</figcaption></figure>
+    <figure><img src="img/phone-approval.png" alt="Approval on the phone"><figcaption>An approval arriving live, with Approve / Reject and Stop.</figcaption></figure>
+    <figure style="flex:0.6"><img src="img/phone-home.png" alt="App icon"><figcaption>The app on the home screen.</figcaption></figure>
+  </div>
+  <h3>Remove a phone</h3>
+  <div class="term"><span class="p">$</span> wots devices list
+<span class="p">$</span> wots devices revoke dev_…      <span class="c"># disconnects it immediately</span>
+<span class="p">$</span> wots gateway disable          <span class="c"># turn phone access off entirely</span></div>
+  <div class="note"><b>Your phone only ever talks to your Mac.</b> The pairing link carries your Mac’s certificate fingerprint; the app refuses any other server. The phone can follow and steer sessions but can’t change settings, register projects or run commands of its own. To reach your Mac away from home, use your own VPN (for example Tailscale) and enable the gateway on that address.</div>
+</section>
+
+<section>
+  <h2>10 · Command reference</h2>
+  <p>Everything you can do outside an interactive session. Add <code>--json</code> before a command for machine-readable output, for example <code>wots --json sessions</code>.</p>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>wots</code></td><td>Interactive session in the current folder.</td></tr>
+    <tr><td><code>wots doctor</code></td><td>Tool versions, sign-in, billing route and runner state.</td></tr>
+    <tr><td><code>wots setup</code></td><td>Guided check, plus permission to continue chats on the other provider.</td></tr>
+    <tr><td><code>wots chat "…"</code></td><td>One chat message with no file access.</td></tr>
+    <tr><td><code>wots code --project &lt;path&gt; "…"</code></td><td>One coding task in a project folder. Add <code>--consent</code> to allow handing it to the other provider.</td></tr>
+    <tr><td><code>wots sessions</code></td><td>List sessions.</td></tr>
+    <tr><td><code>wots resume &lt;id&gt; [--fallback]</code></td><td>Resume a paused session, optionally on the next model.</td></tr>
+    <tr><td><code>wots approve &lt;id&gt; --version &lt;n&gt; [--session]</code></td><td>Approve a pending action (<code>wots reject …</code> rejects).</td></tr>
+    <tr><td><code>wots models</code> · <code>wots connections</code></td><td>Known models; provider connection status.</td></tr>
+    <tr><td><code>wots usage</code></td><td>Usage per provider and window.</td></tr>
+    <tr><td><code>wots fallback show | set | threshold</code></td><td>See or change the model order and the switch point.</td></tr>
+    <tr><td><code>wots export &lt;id&gt; [--format json]</code></td><td>Export a session as Markdown or JSON (secrets redacted).</td></tr>
+    <tr><td><code>wots gateway enable | pair | status | disable</code></td><td>Phone access.</td></tr>
+    <tr><td><code>wots devices list | revoke &lt;id&gt;</code></td><td>Paired phones.</td></tr>
+    <tr><td><code>wots runner status | start | stop</code></td><td>The background runner.</td></tr>
+  </table>
+  <p class="muted">Exit codes for scripts: 0 completed, 10 paused, 1 failed, 130 cancelled, 3 runner unavailable.</p>
+</section>
+
+<section>
+  <h2>11 · Privacy and safety</h2>
+  <ul>
+    <li><b>Everything stays on your Mac</b> in <code>~/Library/Application Support/WotsRelay</code>, readable only by your user account.</li>
+    <li><b>No passwords, no tokens.</b> Sign-in happens in the official <code>claude</code> and <code>codex</code> tools. WotsRelay never reads their credential files.</li>
+    <li><b>Secrets are kept out of handoffs.</b> Files like <code>.env</code>, keys and certificates are never sent to the other provider, and known secret formats (API keys, tokens, private keys) are blanked out of anything that is.</li>
+    <li><b>Your uncommitted changes are safe.</b> WotsRelay never resets, stashes, commits or pushes for you.</li>
+    <li><b>Risky actions ask first,</b> and the request shows exactly what will run and where.</li>
+    <li><b>Provider switching follows each provider’s rules.</b> WotsRelay uses only your own signed-in accounts and never rotates accounts or works around limits.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>12 · Troubleshooting</h2>
+  <table>
+    <tr><th>Problem</th><th>What to do</th></tr>
+    <tr><td><code>command not found: wots</code></td><td>Repeat step 2 of the installation from inside the project folder, then run <code>rehash</code> or open a new terminal tab.</td></tr>
+    <tr><td>A provider shows as signed out</td><td>Sign in with <code>claude auth login</code> or <code>codex login</code>, then choose <b>Retry</b> in the pause menu.</td></tr>
+    <tr><td>“Runner did not start”</td><td>Run <code>wots runner status</code>; the message points to <code>logs/runner.log</code>. A very long custom <code>WOTS_HOME</code> path can be too long for macOS sockets.</td></tr>
+    <tr><td>The phone says “Reconnecting…”</td><td>Check the Mac is awake and on the same network (or VPN), and that <code>wots gateway status</code> shows it listening.</td></tr>
+    <tr><td>“This pairing link was already used or has expired”</td><td>Links last 2 minutes and work once. Run <code>wots gateway pair</code> again.</td></tr>
+    <tr><td>The phone says it was unpaired</td><td>It was revoked on the Mac. Pair it again with a new link.</td></tr>
+    <tr><td>The model didn’t switch at 95%</td><td>It switches on your <i>next</i> message, never mid-reply. If you haven’t allowed sharing the conversation yet, WotsRelay asks first.</td></tr>
+    <tr><td>Something looks wrong</td><td><code>wots doctor</code> shows versions, sign-in and billing without revealing any secrets.</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>13 · What’s coming next</h2>
+  <p>These are being built now and are <b>not available yet</b>:</p>
+  <table>
+    <tr><th>Feature</th><th>Status</th></tr>
+    <tr><td><b>Cursor</b> as a third provider</td><td><span class="chip soon">in progress</span> The connection to Cursor’s command-line tool is written and tested against its published format; it becomes selectable once the provider settings commands land and it has been checked with a real Cursor account.</td></tr>
+    <tr><td><b>Gemini</b> as a fourth provider</td><td><span class="chip soon">in progress</span> Through Google’s official Gemini API with your own API key (billed by Google per use, separately from any Gemini subscription).</td></tr>
+    <tr><td><b>Antigravity</b></td><td><span class="chip soon">in progress</span> Detection and a button to open it in its own Terminal window. Google’s terms don’t allow other apps to drive it, so WotsRelay will never automate it.</td></tr>
+    <tr><td>Provider settings page and <code>wots providers</code></td><td><span class="chip soon">in progress</span> Enable, disable and reorder providers; inspect each handoff.</td></tr>
+    <tr><td>QR pairing and notifications on the iPhone</td><td><span class="chip soon">planned</span></td></tr>
+    <tr><td>A signed, installable Mac app</td><td><span class="chip soon">planned</span> Needs Apple developer signing.</td></tr>
+  </table>
+</section>
+
+</body>
+</html>
