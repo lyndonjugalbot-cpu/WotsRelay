@@ -4,6 +4,7 @@ import {
   type ApprovalDecision,
   type Attempt,
   type Checkpoint,
+  type Connection,
   type EventEnvelope,
   type EventPayload,
   type EventType,
@@ -255,7 +256,8 @@ export class RelayController {
     if (skip) for (const r of session.fallback.routes) if (r.connectionId === skip) tried.add(routeKey(r));
     const moving = opts.fallback || !!skip;
     const project = session.projectId ? this.store.getProject(session.projectId) : null;
-    const pick = this.pickRoute(session, project, tried, moving ? (last?.connectionId ?? null) : null);
+    // An explicit user resume may use the session's primary even before its sign-in is confirmed (R8).
+    const pick = this.pickRoute(session, project, tried, moving ? (last?.connectionId ?? null) : null, true);
     if (!pick.route) throw new RelayError('no_route', `No eligible route: ${pick.reasons.join('; ')}`);
     let cp = this.store.latestCheckpoint(sessionId);
     const why = skip ? `User skipped ${skip}` : opts.fallback ? 'User-confirmed continuation on next provider' : 'Resumed by user';
@@ -351,9 +353,12 @@ export class RelayController {
     const out: Array<{ connectionId: string; ok: boolean; error?: string }> = [];
     for (const a of this.adapters.values()) {
       try {
-        const c = await a.getConnectionStatus();
+        const reported = await a.getConnectionStatus();
+        // R8: a sign-in confirmed by a successful run outlives a status check that can only say 'unknown'.
+        const prev = this.store.getSetting<ConnCache | null>(`conn:${a.connectionId}`, null);
+        const c = reported.authStatus === 'unknown' && prev?.confirmedByRun ? confirmedConnection(reported) : reported;
         const models = c.authStatus === 'authenticated' ? await a.listModels().catch(() => []) : [];
-        this.store.setSetting(`conn:${a.connectionId}`, { auth: c.authStatus, billing: c.billingMode, models: models.filter((m) => m.verification !== 'unavailable').map((m) => m.modelId), connection: c });
+        this.store.setSetting(`conn:${a.connectionId}`, { auth: c.authStatus, billing: c.billingMode, models: models.filter((m) => m.verification !== 'unavailable').map((m) => m.modelId), connection: c, ...(c !== reported ? { confirmedByRun: true } : {}) });
         for (const m of models) if (m.contextLimit) this.store.setSetting(`ctx:${a.connectionId}:${m.modelId}`, m.contextLimit);
         this.store.setSetting(`models:${a.connectionId}`, models);
         out.push({ connectionId: a.connectionId, ok: true });
@@ -376,7 +381,8 @@ export class RelayController {
     // Return to the primary on a new run: each run starts from the top of the route list.
     // Earlier turns bind the conversation to the provider that answered last.
     const prior = this.lastAttemptBefore(session.id, runId);
-    const pick = this.pickRoute(session, project, new Set(), prior?.connectionId ?? null);
+    // A new run may start on the chosen primary even before its sign-in is confirmed (R8).
+    const pick = this.pickRoute(session, project, new Set(), prior?.connectionId ?? null, true);
     if (!pick.route) {
       this.transition(runId, 'paused_auth', `No eligible provider route: ${pick.reasons.join('; ')}`);
       return;
@@ -452,6 +458,7 @@ export class RelayController {
       return {
         route,
         authenticated: !!a && (a.isMock || status?.auth === 'authenticated'),
+        authUnknown: !!a && !a.isMock && status?.auth === 'unknown',
         billing: (status?.billing ?? (a?.isMock ? 'subscription' : 'unknown')) as RouteCandidate['billing'],
         modelAvailable: !!a && (a.isMock || !status || status.models.length === 0 || status.models.includes(route.modelId)),
         coolingDownUntil: this.cooldowns.get(routeKey(route)) ?? null,
@@ -461,14 +468,21 @@ export class RelayController {
     });
   }
 
-  private pickRoute(session: Session, project: Project | null, tried: Set<string>, currentConnectionId: string | null) {
+  // R8: a completed real attempt proves the provider's sign-in works.
+  private confirmSignIn(connectionId: string): void {
+    const cached = this.store.getSetting<ConnCache | null>(`conn:${connectionId}`, null);
+    if (cached?.auth !== 'unknown') return;
+    this.store.setSetting(`conn:${connectionId}`, { ...cached, auth: 'authenticated', confirmedByRun: true, connection: cached.connection ? confirmedConnection(cached.connection) : cached.connection });
+  }
+
+  private pickRoute(session: Session, project: Project | null, tried: Set<string>, currentConnectionId: string | null, allowUnknownAuthForFirst = false) {
     const consent = project ? project.crossProviderConsent : this.store.getSetting<boolean>('chat.crossProviderConsent', false);
     const allowMock = session.mode === 'mock';
     const cands = this.candidates(session).filter((c) => c.isMock === allowMock);
     // Disabling a provider reaches existing sessions too: honour both the session's own list and the global setting.
     const globalOff = this.store.getSetting<{ disabledConnections?: string[] } | null>('fallback', null)?.disabledConnections ?? [];
     const config = { ...session.fallback, disabledConnections: [...new Set([...(session.fallback.disabledConnections ?? []), ...globalOff])] };
-    return selectNextRoute({ config, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock });
+    return selectNextRoute({ config, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock, allowUnknownAuthForFirst });
   }
 
   private budgetFor(route: RouteRef) {
@@ -541,6 +555,7 @@ export class RelayController {
 
         if (active.cancelRequested) return this.cancel(runId);
         if (outcome.termination === 'completed') {
+          if (!adapter.isMock) this.confirmSignIn(route.connectionId);
           this.transition(runId, 'completed', null);
           this.store.clearTransitionIntent(runId);
           return;
@@ -904,6 +919,20 @@ function isValidAdapterEvent(e: AdapterEventEnvelope): boolean {
     default:
       return true;
   }
+}
+
+// Cached connection status (`conn:<id>`); route eligibility reads it.
+interface ConnCache {
+  auth: string;
+  billing: string;
+  models: string[];
+  connection?: Connection;
+  // R8: set once a real attempt on this connection completed while its sign-in was 'unknown'.
+  confirmedByRun?: boolean;
+}
+
+function confirmedConnection(c: Connection): Connection {
+  return { ...c, authStatus: 'authenticated', limitations: [...c.limitations.filter((l) => !/^Sign-in is confirmed by/.test(l)), 'Sign-in confirmed by a successful run'] };
 }
 
 function previewArgs(name: string, args: unknown): string {

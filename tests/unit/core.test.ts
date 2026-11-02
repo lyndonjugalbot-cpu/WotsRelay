@@ -104,6 +104,16 @@ describe('route selection', () => {
     expect(r.route).toBeNull();
     expect('reasons' in r && r.reasons.join()).toContain('consented');
   });
+  it('a provider with unconfirmed sign-in may run only as the chosen primary, never as an automatic fallback (R8)', () => {
+    const unknown = { authenticated: false, authUnknown: true };
+    const first = { ...base, currentConnectionId: null, candidates: [cand('claude-code', 'claude-opus-5-5', unknown), cand('codex', 'gpt-6-astra')] };
+    expect(selectNextRoute({ ...first, allowUnknownAuthForFirst: true }).route).toEqual({ connectionId: 'claude-code', modelId: 'claude-opus-5-5' });
+    const auto = selectNextRoute(first);
+    expect(auto.route).toEqual({ connectionId: 'codex', modelId: 'gpt-6-astra' });
+    const fb = selectNextRoute({ ...base, allowUnknownAuthForFirst: true, candidates: [cand('claude-code', 'claude-opus-5-5'), cand('codex', 'gpt-6-astra', unknown)], tried: new Set(['claude-code:claude-opus-5-5']) });
+    expect(fb.route).toBeNull();
+    expect('reasons' in fb && fb.reasons).toContain('codex:gpt-6-astra: sign-in not confirmed yet (never an automatic fallback until a run succeeds)');
+  });
   it('respects cooldowns, auth and mock isolation', () => {
     expect(selectNextRoute({ ...base, currentConnectionId: null, candidates: [cand('claude-code', 'claude-opus-5-5', { coolingDownUntil: 5000 }), cand('codex', 'gpt-6-astra', { authenticated: false })] }).route).toBeNull();
     expect(selectNextRoute({ ...base, currentConnectionId: null, candidates: [cand('claude-code', 'claude-opus-5-5', { isMock: true })] }).route).toBeNull();

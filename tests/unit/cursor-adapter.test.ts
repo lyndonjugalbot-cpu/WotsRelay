@@ -1,7 +1,9 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { AdapterEventEnvelope, AttemptInput, AttemptOutcome, CaptureEntry } from '@wots/core';
+import type { AdapterEventEnvelope, AttemptInput, AttemptOutcome, CaptureEntry, ProviderAdapter } from '@wots/core';
+import { MockAdapter } from '@wots/adapter-mock';
+import type { FallbackConfig } from '@wots/protocol';
 import { CursorAdapter, buildCursorArgs, classifyCursorExit, newCursorStreamState, resolveCursorExecutable, translateCursorLine } from '@wots/adapter-cursor';
 import { harness, tempDir } from '../helpers.ts';
 
@@ -21,12 +23,12 @@ function replayExecutable(fixture: string): string {
 const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: tempDir('whome-') };
 const of = <T extends AdapterEventEnvelope['type']>(events: AdapterEventEnvelope[], type: T) => events.filter((e): e is Extract<AdapterEventEnvelope, { type: T }> => e.type === type);
 
-async function replay(fixture: string, opts: { code?: boolean; interruptOnDelta?: boolean; model?: string } = {}) {
+async function replay(fixture: string, opts: { code?: boolean; interruptOnDelta?: boolean; model?: string; applyEdits?: boolean } = {}) {
   const captured: CaptureEntry[] = [];
   const sandbox = tempDir('wsb-');
-  const adapter = new CursorAdapter({ executable: replayExecutable(fixture), chatSandboxDir: sandbox, env, capture: () => ({ record: (e) => captured.push(e) }) });
+  const adapter = new CursorAdapter({ executable: replayExecutable(fixture), chatSandboxDir: sandbox, env, applyEdits: () => !!opts.applyEdits, capture: () => ({ record: (e) => captured.push(e) }) });
   await adapter.probe();
-  const h = adapter.startAttempt({ attemptId: 'att_replay', cwd: opts.code ? tempDir('wrepo-') : null, model: opts.model ?? 'default', effort: 'medium', prompt: 'replayed prompt', permissionProfile: opts.code ? 'edit' : 'chat', resumeProviderSessionId: null });
+  const h = adapter.startAttempt({ attemptId: 'att_replay', cwd: opts.code ? tempDir('wrepo-') : null, model: opts.model ?? 'default', effort: 'medium', prompt: 'replayed prompt', permissionProfile: opts.code ? 'edit' : 'chat', resumeProviderSessionId: null, projectId: 'prj_test' });
   const events: AdapterEventEnvelope[] = [];
   let interrupted = false;
   for await (const e of h.events) {
@@ -66,7 +68,7 @@ describe('Cursor adapter (replay)', () => {
   });
 
   it('partial deltas and the duplicate flushes never duplicate text', async () => {
-    const { events, outcome } = await replay('code-write.jsonl', { code: true });
+    const { events, outcome } = await replay('code-write.jsonl', { code: true, applyEdits: true });
     expect(outcome.termination).toBe('completed');
     const completed = of(events, 'message.completed');
     expect(completed.map((e) => e.text)).toEqual(['Reading the README first.', 'Created notes/a.txt.']);
@@ -79,6 +81,15 @@ describe('Cursor adapter (replay)', () => {
       ['Write', 'reversible-local-write', ['notes/a.txt']],
     ]);
     expect(of(events, 'tool.completed').map((e) => e.providerToolId)).toEqual(['call_1', 'call_2']);
+    expect(of(events, 'tool.denied')).toEqual([]);
+  });
+
+  it('proposals-only (edits off): a write is reported as denied, never as completed work (R9)', async () => {
+    const { events, outcome, captured } = await replay('code-write.jsonl', { code: true });
+    expect(outcome.termination).toBe('completed');
+    expect((captured.find((e) => e.d === 'start') as { args: string[] }).args).not.toContain('--force');
+    expect(of(events, 'tool.completed').map((e) => e.providerToolId)).toEqual(['call_1']);
+    expect(of(events, 'tool.denied')).toEqual([{ type: 'tool.denied', providerToolId: 'call_2', message: 'Proposed only — Cursor did not apply this change (edits are off for this project)' }]);
   });
 
   it('a malformed line becomes a diagnostic, not a crash', async () => {
@@ -89,7 +100,7 @@ describe('Cursor adapter (replay)', () => {
   });
 
   it('exit 1 without a result: unknown failure with redacted stderr; edits before it are reported', async () => {
-    const { events, outcome } = await replay('code-exit-no-result.jsonl', { code: true });
+    const { events, outcome } = await replay('code-exit-no-result.jsonl', { code: true, applyEdits: true });
     expect(outcome.termination).toBe('failed');
     expect(outcome.failure).toMatchObject({ kind: 'unknown', evidence: 'exit:1' });
     expect(outcome.failure!.message).toContain('request failed');
@@ -110,18 +121,78 @@ describe('Cursor adapter (replay)', () => {
   });
 });
 
+const REAL: FallbackConfig = { routes: [], effort: 'medium', speed: 'standard', autoFallback: true, outageFallback: false, allowApiBilling: false, switchAtPercent: 95, disabledConnections: [], attemptTimeoutMs: 3_600_000, transportRetries: 2, notifyOnSwitch: true };
+
+// A signed-in, non-mock provider that reports a confirmed usage limit, so the run falls back.
+function limitedRealProvider(): ProviderAdapter {
+  const m = new MockAdapter({ connectionId: 'claude-code', label: 'limited', models: ['claude-opus-5-5'], script: () => [{ kind: 'fail', failure: { kind: 'usage_limit', message: 'limit', evidence: 'test:limit', retryAfterMs: null, resetAt: null, scope: 'account' } }] });
+  return {
+    connectionId: 'claude-code',
+    provider: 'anthropic',
+    kind: 'claude-code-cli',
+    isMock: false,
+    probe: () => m.probe(),
+    getConnectionStatus: async () => ({ ...(await m.getConnectionStatus()), isMock: false, authStatus: 'authenticated', billingMode: 'subscription' }),
+    listModels: () => m.listModels(),
+    capabilities: () => m.capabilities(),
+    startAttempt: (i) => m.startAttempt(i),
+    dispose: () => m.dispose(),
+  };
+}
+
+describe('Cursor sign-in confirmation (R8)', () => {
+  const fallbackSession = (h: ReturnType<typeof harness>) => h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { ...REAL, routes: [{ connectionId: 'claude-code', modelId: 'claude-opus-5-5' }, { connectionId: 'cursor', modelId: 'default' }] } });
+
+  it('(a) runs as the chosen primary while its sign-in is unknown, then the run confirms it', async () => {
+    const h = harness('success', { adapters: [new CursorAdapter({ executable: replayExecutable('chat-success.jsonl'), chatSandboxDir: tempDir('wsb-'), env })] });
+    await h.relay.refreshConnections();
+    expect(h.store.getSetting<{ auth: string }>('conn:cursor', { auth: '' }).auth).toBe('unknown');
+    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { ...REAL, routes: [{ connectionId: 'cursor', modelId: 'default' }] } });
+    const run = await h.relay.waitForRun(h.relay.sendMessage({ sessionId: s.id, text: 'ping', idempotencyKey: 'cursor-r8-a' }).runId);
+    expect(run.state).toBe('completed');
+    const conn = h.store.getSetting<{ auth: string; connection: { authStatus: string; limitations: string[] } }>('conn:cursor', null as never);
+    expect(conn.auth).toBe('authenticated');
+    expect(conn.connection.authStatus).toBe('authenticated');
+    expect(conn.connection.limitations).toContain('Sign-in confirmed by a successful run');
+    // A later refresh still reports 'unknown' from Cursor; the confirmation is kept.
+    await h.relay.refreshConnections();
+    expect(h.store.getSetting<{ auth: string }>('conn:cursor', { auth: '' }).auth).toBe('authenticated');
+  });
+
+  it('(b) is never an automatic fallback target while its sign-in is unknown', async () => {
+    const cursor = new CursorAdapter({ executable: replayExecutable('chat-success.jsonl'), chatSandboxDir: tempDir('wsb-'), env });
+    const h = harness('success', { adapters: [limitedRealProvider(), cursor] });
+    await h.relay.refreshConnections();
+    const run = await h.relay.waitForRun(h.relay.sendMessage({ sessionId: fallbackSession(h).id, text: 'go', idempotencyKey: 'cursor-r8-b' }).runId);
+    expect(run.state).toBe('paused_limits');
+    expect(run.stateReason).toContain('cursor:default: sign-in not confirmed yet');
+    expect(h.store.attemptsForRun(run.id).map((a) => a.connectionId)).toEqual(['claude-code']);
+  });
+
+  it('(c) after one completed Cursor run it becomes an automatic fallback target', async () => {
+    const cursor = new CursorAdapter({ executable: replayExecutable('chat-success.jsonl'), chatSandboxDir: tempDir('wsb-'), env });
+    const h = harness('success', { adapters: [limitedRealProvider(), cursor] });
+    await h.relay.refreshConnections();
+    const first = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { ...REAL, routes: [{ connectionId: 'cursor', modelId: 'default' }] } });
+    expect((await h.relay.waitForRun(h.relay.sendMessage({ sessionId: first.id, text: 'ping', idempotencyKey: 'cursor-r8-c1' }).runId)).state).toBe('completed');
+    const run = await h.relay.waitForRun(h.relay.sendMessage({ sessionId: fallbackSession(h).id, text: 'go', idempotencyKey: 'cursor-r8-c2' }).runId);
+    expect(run.state).toBe('completed');
+    expect(h.store.attemptsForRun(run.id).map((a) => a.connectionId)).toEqual(['claude-code', 'cursor']);
+  });
+});
+
 describe('Cursor adapter (controller)', () => {
   it('exit 1 with no result pauses the run as unknown and journals the edit', async () => {
-    const cursor = new CursorAdapter({ executable: replayExecutable('code-exit-no-result.jsonl'), chatSandboxDir: tempDir('wsb-'), env });
+    const cursor = new CursorAdapter({ executable: replayExecutable('code-exit-no-result.jsonl'), chatSandboxDir: tempDir('wsb-'), env, applyEdits: () => true });
     // Stands in for Cursor's write landing on disk (the replayer only plays the stream).
     const h = harness('success', { adapters: [cursor], onEvent: (e) => {
       if (e.type !== 'tool.started') return;
       mkdirSync(join(h.repo, 'notes'), { recursive: true });
       writeFileSync(join(h.repo, 'notes', 'a.txt'), 'hello\n');
     } });
-    // Simulates a confirmed sign-in; Cursor's own status stays 'unknown' until a first run.
-    h.store.setSetting('conn:cursor', { auth: 'authenticated', billing: 'subscription', models: [] });
-    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { routes: [{ connectionId: 'cursor', modelId: 'default' }], effort: 'medium', speed: 'standard', autoFallback: true, outageFallback: false, allowApiBilling: false, switchAtPercent: 95, disabledConnections: [], attemptTimeoutMs: 3_600_000, transportRetries: 2, notifyOnSwitch: true } });
+    // Cursor's sign-in stays 'unknown' (R8: allowed because it is the session's primary).
+    await h.relay.refreshConnections();
+    const s = h.relay.createSession({ projectId: h.projectId, mode: 'real', fallback: { ...REAL, routes: [{ connectionId: 'cursor', modelId: 'default' }] } });
     const { runId } = h.relay.sendMessage({ sessionId: s.id, text: 'Write notes', idempotencyKey: 'cursor-exit-1' });
     const run = await h.relay.waitForRun(runId);
     expect(run.state).toBe('paused_uncertain');
@@ -189,6 +260,26 @@ describe('Cursor arguments', () => {
 });
 
 describe('Cursor translation', () => {
+  it('an end-of-turn flush after a trailing tool call repeats nothing', () => {
+    const st = newCursorStreamState();
+    const lines = [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking.' }] }, timestamp_ms: 1 },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking.' }] }, timestamp_ms: 2, model_call_id: 'm1' },
+      { type: 'tool_call', subtype: 'started', call_id: 'r1', tool_call: { readToolCall: { args: { path: 'a' } } } },
+      { type: 'tool_call', subtype: 'completed', call_id: 'r1', tool_call: { readToolCall: { args: { path: 'a' }, result: { success: {} } } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking.' }] } },
+      { type: 'result', subtype: 'success', is_error: false, result: 'Checking.' },
+    ];
+    const out = lines.flatMap((l) => translateCursorLine(l, st, 'default'));
+    expect(out.filter((e) => e.type === 'message.completed').map((e) => (e as { text: string }).text)).toEqual(['Checking.']);
+  });
+
+  it('without any delta, flushes still carry the text once', () => {
+    const st = newCursorStreamState();
+    const out = translateCursorLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'pong' }] } }, st, 'default');
+    expect(out).toEqual([{ type: 'message.completed', messageKey: 'cursor:0', text: 'pong' }]);
+  });
+
   it('shell tool calls are classified by their command', () => {
     const st = newCursorStreamState();
     const ev = (command: string, id: string) => translateCursorLine({ type: 'tool_call', subtype: 'started', call_id: id, tool_call: { shellToolCall: { args: { command } } } }, st, 'default');

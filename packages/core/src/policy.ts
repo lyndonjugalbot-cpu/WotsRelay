@@ -120,6 +120,8 @@ export function throttleDelay(retries: number, retryAfterMs: number | null, rand
 export interface RouteCandidate {
   route: RouteRef;
   authenticated: boolean;
+  // Sign-in is neither confirmed nor refuted (e.g. Cursor before its first successful run).
+  authUnknown?: boolean;
   billing: 'subscription' | 'api' | 'unknown';
   modelAvailable: boolean;
   coolingDownUntil: number | null;
@@ -161,6 +163,9 @@ export interface RouteSelectionInput {
   now: number;
   // Mock routes are only eligible when the session was explicitly created in mock mode.
   allowMock: boolean;
+  // R8: a route whose sign-in is unknown may run only as the session's chosen primary (the first
+  // route, on a new run or an explicit user resume). Never set for automatic fallback selection.
+  allowUnknownAuthForFirst?: boolean;
 }
 
 export function routeKey(r: RouteRef): string {
@@ -178,7 +183,7 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
   const threshold = input.config.switchAtPercent ?? DEFAULT_SWITCH_AT_PERCENT;
   const nearlyFull: Array<{ route: RouteRef; window: UsageWindow }> = [];
   const disabled = new Set(input.config.disabledConnections ?? []);
-  for (const route of input.config.routes) {
+  for (const [index, route] of input.config.routes.entries()) {
     const key = routeKey(route);
     if (disabled.has(route.connectionId)) {
       reasons.push(`${route.connectionId}: disabled by user`);
@@ -197,8 +202,9 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
       reasons.push(`${key}: mock route not allowed for a real session`);
       continue;
     }
-    if (!c.authenticated) {
-      reasons.push(`${key}: not authenticated`);
+    // Spec §7: never switch automatically to a provider that lacks valid authorization.
+    if (!c.authenticated && !(c.authUnknown && input.allowUnknownAuthForFirst && index === 0)) {
+      reasons.push(c.authUnknown ? `${key}: sign-in not confirmed yet (never an automatic fallback until a run succeeds)` : `${key}: not authenticated`);
       continue;
     }
     if (!c.modelAvailable) {

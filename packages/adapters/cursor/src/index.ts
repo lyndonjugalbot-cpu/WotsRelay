@@ -130,12 +130,19 @@ export interface CursorStreamState {
   // Text segment between tool calls: deltas accumulate here until a flush or a tool call closes it.
   segment: number;
   segmentText: string;
+  // Once any delta has arrived, every flush is a duplicate (even one after a trailing tool call).
+  sawDelta: boolean;
+  // Whether this attempt ran with --force. Without it Cursor only proposes edits.
+  applyEdits: boolean;
   stderrTail: string;
 }
 
-export function newCursorStreamState(): CursorStreamState {
-  return { sessionId: null, sawResult: false, resultIsError: false, segment: 0, segmentText: '', stderrTail: '' };
+export function newCursorStreamState(opts: { applyEdits?: boolean } = {}): CursorStreamState {
+  return { sessionId: null, sawResult: false, resultIsError: false, segment: 0, segmentText: '', sawDelta: false, applyEdits: opts.applyEdits ?? false, stderrTail: '' };
 }
+
+export const PROPOSED_ONLY = 'Proposed only — Cursor did not apply this change (edits are off for this project)';
+const EDIT_TOOLS = new Set(['Write', 'Edit']);
 
 function textOf(msg: Json): string {
   const content = (msg.message as { content?: unknown } | undefined)?.content;
@@ -145,9 +152,10 @@ function textOf(msg: Json): string {
 const segmentKey = (st: CursorStreamState) => `${st.sessionId ?? 'cursor'}:${st.segment}`;
 
 // Close the current text segment. The completed text is what the deltas carried; a flush's own
-// text is used only when no delta preceded it (the flushes duplicate earlier deltas, per the docs).
+// text is used only when the attempt has streamed no delta at all (the flushes duplicate earlier
+// deltas, per the docs, and the end-of-turn flush can repeat segments already closed).
 function closeSegment(st: CursorStreamState, flushText: string): AdapterEventEnvelope[] {
-  const text = st.segmentText || flushText;
+  const text = st.segmentText || (st.sawDelta ? '' : flushText);
   const out: AdapterEventEnvelope[] = text ? [{ type: 'message.completed', messageKey: segmentKey(st), text }] : [];
   if (text) st.segment++;
   st.segmentText = '';
@@ -178,6 +186,7 @@ export function translateCursorLine(msg: Json, st: CursorStreamState, requestedM
       const isDelta = msg.timestamp_ms !== undefined && msg.model_call_id === undefined;
       if (isDelta) {
         if (text) {
+          st.sawDelta = true;
           st.segmentText += text;
           out.push({ type: 'message.delta', messageKey: segmentKey(st), text });
         }
@@ -197,7 +206,10 @@ export function translateCursorLine(msg: Json, st: CursorStreamState, requestedM
         out.push({ type: 'tool.started', providerToolId: id, name: tool.name, args: tool.args, risk: tool.risk, paths: toolPaths(tool.args) });
       } else if (msg.subtype === 'completed') {
         const r = tool.result as Json | undefined;
-        if (r && typeof r === 'object' && 'success' in r) {
+        if (r && typeof r === 'object' && 'success' in r && EDIT_TOOLS.has(tool.name) && !st.applyEdits) {
+          // Without --force Cursor proposes the change but does not write it: never journal it as done (R9).
+          out.push({ type: 'tool.denied', providerToolId: id, message: PROPOSED_ONLY });
+        } else if (r && typeof r === 'object' && 'success' in r) {
           out.push({ type: 'tool.completed', providerToolId: id, result: JSON.stringify(r.success ?? null).slice(0, 2000) });
         } else if (r && typeof r === 'object') {
           const [key] = Object.keys(r);
@@ -302,9 +314,10 @@ export class CursorAdapter implements ProviderAdapter {
     }
     mkdirSync(this.opts.chatSandboxDir, { recursive: true, mode: 0o700 });
     const cwd = input.permissionProfile === 'chat' || !input.cwd ? this.opts.chatSandboxDir : input.cwd;
-    const args = buildCursorArgs({ ...input, cwd }, { applyEdits: this.applyEdits(input.projectId) });
+    const applyEdits = this.applyEdits(input.projectId) && input.permissionProfile === 'edit';
+    const args = buildCursorArgs({ ...input, cwd }, { applyEdits });
     const proc = spawnManaged(this.exe, args, { cwd, env: this.env, capture: this.opts.capture?.({ connectionId: this.connectionId, version: this.version }) });
-    const st = newCursorStreamState();
+    const st = newCursorStreamState({ applyEdits });
     let interrupted = false;
     proc.child.stdout.on(
       'data',
