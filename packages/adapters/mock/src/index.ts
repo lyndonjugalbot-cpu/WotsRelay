@@ -20,6 +20,8 @@ export type MockStep =
   | { kind: 'toolStartNoResult'; name: string; args: unknown; risk: RiskCategory }
   // A tool that runs and reports a failure (a failing test, a rejected command): not a provider failure.
   | { kind: 'toolFailed'; name: string; args: unknown; message: string }
+  // A tool that runs to completion (a passing test run, a build).
+  | { kind: 'toolDone'; name: string; args: unknown; risk: RiskCategory; result: string }
   | { kind: 'approval'; action: string; risk: RiskCategory; thenWrite?: { path: string; content: string } }
   | { kind: 'delay'; ms: number }
   | { kind: 'malformed' }
@@ -165,6 +167,12 @@ export class MockAdapter implements ProviderAdapter {
             const toolId = `t${++counter}`;
             emit({ type: 'tool.started', providerToolId: toolId, name: step.name, args: step.args, risk: 'read-only', paths: [] });
             emit({ type: 'tool.failed', providerToolId: toolId, message: step.message });
+            break;
+          }
+          case 'toolDone': {
+            const toolId = `t${++counter}`;
+            emit({ type: 'tool.started', providerToolId: toolId, name: step.name, args: step.args, risk: step.risk, paths: [] });
+            emit({ type: 'tool.completed', providerToolId: toolId, result: step.result });
             break;
           }
           case 'approval': {

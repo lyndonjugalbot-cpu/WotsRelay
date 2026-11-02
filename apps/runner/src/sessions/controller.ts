@@ -10,6 +10,7 @@ import {
   type Failure,
   type FallbackConfig,
   type Project,
+  type ProviderErrorCategory,
   type RouteRef,
   type Run,
   type RunState,
@@ -18,6 +19,8 @@ import {
 } from '@wots/protocol';
 import {
   assertTransition,
+  categoryOf,
+  classifyShellCommand,
   decide,
   routeKey,
   selectNextRoute,
@@ -32,7 +35,7 @@ import {
 } from '@wots/core';
 import type { Store } from '@wots/storage';
 import { buildHandoff, DEFAULT_BUDGET } from '@wots/context';
-import { buildManifest, diffManifests, gitBaseline, workspaceDiff, type WorkspaceLeases } from '@wots/workspace';
+import { buildManifest, diffManifests, gitBaseline, gitStatusLines, workspaceDiff, type WorkspaceLeases } from '@wots/workspace';
 import { canonicalHash, newId, redact } from '@wots/security';
 
 export const DEFAULT_FALLBACK: FallbackConfig = {
@@ -462,7 +465,10 @@ export class RelayController {
     const consent = project ? project.crossProviderConsent : this.store.getSetting<boolean>('chat.crossProviderConsent', false);
     const allowMock = session.mode === 'mock';
     const cands = this.candidates(session).filter((c) => c.isMock === allowMock);
-    return selectNextRoute({ config: session.fallback, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock });
+    // Disabling a provider reaches existing sessions too: honour both the session's own list and the global setting.
+    const globalOff = this.store.getSetting<{ disabledConnections?: string[] } | null>('fallback', null)?.disabledConnections ?? [];
+    const config = { ...session.fallback, disabledConnections: [...new Set([...(session.fallback.disabledConnections ?? []), ...globalOff])] };
+    return selectNextRoute({ config, candidates: cands, tried, crossProviderConsent: consent, currentConnectionId, now: this.clock.now(), allowMock });
   }
 
   private budgetFor(route: RouteRef) {
@@ -573,7 +579,8 @@ export class RelayController {
           return;
         }
         const run = this.store.getRun(runId)!;
-        const cp = this.checkpoint(run, session, project, attempt, decision.reason);
+        const preview = this.pickRoute(session, project, new Set([...tried, routeKey(route)]), route.connectionId).route;
+        const cp = this.checkpoint(run, session, project, attempt, decision.reason, { nextRoute: preview, category: categoryOf(failure.kind) });
         const uncertain = cp.unresolvedActions.filter((a) => a.risk === 'external-side-effect' || a.risk === 'unknown');
         if (uncertain.length) {
           this.transition(runId, 'paused_uncertain', `Work paused: confirm the outcome of ${uncertain.map((u) => `“${u.argsPreview}”`).join(', ')} before continuing.`);
@@ -794,7 +801,7 @@ export class RelayController {
   }
 
   // Deterministic, evidence-based checkpoint (spec §10). Never asks the model to summarize.
-  checkpoint(run: Run, session: Session, project: Project | null, attempt: Attempt | null, reason: string): Checkpoint {
+  checkpoint(run: Run, session: Session, project: Project | null, attempt: Attempt | null, reason: string, extra: { nextRoute?: RouteRef | null; category?: ProviderErrorCategory | null } = {}): Checkpoint {
     const events = this.store.listEvents(session.id);
     const actions = this.store.toolActionsForRun(run.id);
     const userMsgs = events.filter((e) => e.type === 'user.message').map((e) => (e.payload as EventPayload<'user.message'>).text);
@@ -806,6 +813,8 @@ export class RelayController {
         const p = e.payload as EventPayload<'message.completed'>;
         return { role: 'assistant' as const, provider: p.connectionId, model: p.model, text: clip(p.text), interrupted: e.type === 'message.interrupted' };
       });
+    const failedMessages = events.filter((e) => e.type === 'tool.failed' && e.runId === run.id).map((e) => redact((e.payload as EventPayload<'tool.failed'>).message));
+    const testEvidence = actions.filter((a) => a.status === 'completed' && isTestRun(a.name, a.argsPreview)).map((a) => `${a.name}: ${a.argsPreview}`);
     let manifest: Checkpoint['fileManifest'] = [];
     let changes: Checkpoint['changedFiles'] = [];
     let diff = '';
@@ -831,18 +840,18 @@ export class RelayController {
       fileManifest: manifest,
       changedFiles: changes,
       diff,
-      testEvidence: [],
+      testEvidence,
       providerBindings: bindings,
       unresolvedActions: actions
         .filter((a) => a.status === 'unknown' || a.status === 'started')
         .map((a) => ({ operationId: a.operationId, name: a.name, argsPreview: a.argsPreview, risk: a.risk, status: a.status })),
       permissionVersion: project?.permissionVersion ?? 0,
       switchReason: reason,
-      nextRoute: null,
-      handoffCategory: null,
-      gitStatus: [],
-      knownErrors: [],
-      permissionProfile: null,
+      nextRoute: extra.nextRoute ?? null,
+      handoffCategory: extra.category ?? null,
+      gitStatus: project ? gitStatusLines(project.root).map(redact) : [],
+      knownErrors: failedMessages.slice(-10),
+      permissionProfile: project?.permissionProfile ?? null,
       previousProvider: attempt ? { connectionId: attempt.connectionId, model: attempt.effectiveModel ?? attempt.requestedModel } : null,
       createdAtSeq: this.store.latestSeq(session.id),
       createdAt: new Date().toISOString(),
@@ -853,6 +862,13 @@ export class RelayController {
     this.emit(session.id, run.id, attempt?.id ?? null, 'checkpoint.created', { checkpointId: cp.id, contentHash: cp.contentHash, changedFiles: changes.length, omitted: [] });
     return cp;
   }
+}
+
+const TEST_COMMAND = /\b(test|vitest|jest|pytest|cargo test|go test|mocha)\b/;
+// A shell action counts as a test run when it is a recognised command and names a test runner.
+function isTestRun(name: string, argsPreview: string): boolean {
+  if (!/^(bash|shell)$/i.test(name)) return false;
+  return classifyShellCommand(argsPreview) !== 'external-side-effect' && TEST_COMMAND.test(argsPreview);
 }
 
 const ADAPTER_EVENT_TYPES = new Set([

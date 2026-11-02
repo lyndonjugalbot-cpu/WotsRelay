@@ -24,6 +24,7 @@ export const MOBILE_METHODS: ReadonlySet<string> = new Set([
   'sessions.create',
   'sessions.list',
   'sessions.get',
+  'handoff.get',
   'messages.send',
   'runs.interrupt',
   'runs.resume',

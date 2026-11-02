@@ -23,6 +23,7 @@ import { RpcServer, type Handler } from './server/rpc.ts';
 import { Gateway, GatewayPatch } from './server/gateway.ts';
 import { fileCapture, listCaptures } from './capture.ts';
 import { acquireDaemonLock, ensureHome, runnerPaths, type RunnerPaths } from './paths.ts';
+import { handoffViewFor } from './sessions/handoffView.ts';
 
 export const RUNNER_VERSION = '0.1.0';
 
@@ -121,6 +122,8 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
       return store.updateSession(sessionId, { fallback: { ...s.fallback, routes: promoteRoute(s.fallback.routes, route) } });
     },
     'sessions.get': (p) => sessionView(z.object({ sessionId: z.string() }).parse(p).sessionId),
+    // Read-only and redacted; also allowed for a paired phone.
+    'handoff.get': (p) => handoffViewFor(store, z.object({ sessionId: z.string() }).parse(p).sessionId),
     'messages.send': (p) => relay.sendMessage(SendMessageParams.parse(p)),
     'runs.interrupt': (p) => relay.interrupt(z.object({ runId: z.string() }).parse(p).runId),
     'runs.resume': (p) => {
