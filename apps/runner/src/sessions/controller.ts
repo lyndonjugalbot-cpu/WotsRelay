@@ -536,6 +536,7 @@ export class RelayController {
           prompt,
           permissionProfile: project ? project.permissionProfile : 'chat',
           resumeProviderSessionId: resume && resume.connectionId === route.connectionId ? resume.providerSessionId : null,
+          projectId: project?.id ?? null,
         }, session.fallback.attemptTimeoutMs ?? DEFAULT_FALLBACK.attemptTimeoutMs);
 
         if (active.cancelRequested) return this.cancel(runId);

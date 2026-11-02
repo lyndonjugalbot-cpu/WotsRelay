@@ -3,6 +3,10 @@
 Real Claude Code / Codex process streams, replayed through the real adapters by `tests/unit/stream-replay.test.ts`.
 Folder names carry the provider tool version the stream came from.
 
+`cursor-docs/` is the exception: Cursor is not installed yet, so these streams are **synthesised from the documented
+stream-json schema** (cursor.com/docs/cli/reference/output-format, read 2026-11-02) and their `meta` line says
+`"source": "docs"`. Replace them with real captures once Cursor is installed.
+
 ## Capturing new ones (uses real provider quota — needs the owner's go-ahead)
 
 1. `wots capture on`. Each provider process now writes `<WOTS_HOME>/captures/*.jsonl` (redacted, mode 0600).

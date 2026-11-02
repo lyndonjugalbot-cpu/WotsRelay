@@ -39,6 +39,8 @@ export interface AttemptInput {
   permissionProfile: PermissionProfile;
   // Native session to resume on the same provider only. Never another provider's id.
   resumeProviderSessionId: string | null;
+  // Project the attempt runs for, so adapters can honour per-project settings. Null for chat.
+  projectId?: string | null;
 }
 
 export type AttemptTermination = 'completed' | 'failed' | 'interrupted';

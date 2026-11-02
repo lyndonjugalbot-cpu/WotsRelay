@@ -1,0 +1,8 @@
+{"d":"meta","format":1,"connectionId":"cursor","version":"2026.10.28","source":"docs","note":"Synthesised from cursor.com/docs/cli/reference/output-format (read 2026-11-02); replace with a real capture after D6."}
+{"t":1,"d":"start","args":["-p","--output-format","stream-json","--stream-partial-output","--workspace","/SANDBOX","--trust","--sandbox","enabled","--mode","ask","replayed prompt"]}
+{"t":41,"d":"out","line":"{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"login\",\"cwd\":\"/SANDBOX\",\"session_id\":\"00000000-0000-4000-8000-0000000000c1\",\"model\":\"Claude 4 Sonnet\",\"permissionMode\":\"default\"}"}
+{"t":81,"d":"out","line":"this is not json {"}
+{"t":121,"d":"out","line":"{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]},\"session_id\":\"00000000-0000-4000-8000-0000000000c1\",\"timestamp_ms\":1793600000001}"}
+{"t":161,"d":"out","line":"{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]},\"session_id\":\"00000000-0000-4000-8000-0000000000c1\"}"}
+{"t":201,"d":"out","line":"{\"type\":\"result\",\"subtype\":\"success\",\"duration_ms\":1234,\"duration_api_ms\":1234,\"is_error\":false,\"result\":\"pong\",\"session_id\":\"00000000-0000-4000-8000-0000000000c1\",\"request_id\":\"00000000-0000-4000-8000-0000000000e1\"}"}
+{"t":241,"d":"exit","code":0,"signal":null}

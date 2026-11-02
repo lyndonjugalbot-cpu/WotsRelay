@@ -173,7 +173,7 @@ describe('mobile gateway', () => {
     await withGateway('success', async (ctx) => {
       const { phone } = await pairPhone(ctx);
       expect(Array.isArray((await phone.call('sessions.list')).result)).toBe(true);
-      for (const m of ['runner.stop', 'gateway.pair', 'gateway.configure', 'devices.list', 'devices.revoke', 'capture.get', 'capture.set', 'fallback.set', 'settings.setChatConsent', 'projects.register']) {
+      for (const m of ['runner.stop', 'gateway.pair', 'gateway.configure', 'devices.list', 'devices.revoke', 'capture.get', 'capture.set', 'fallback.set', 'settings.setChatConsent', 'projects.register', 'cursor.setApplyEdits']) {
         expect((await phone.call(m, {})).error?.code, m).toBe('unknown_method');
       }
       expect(await ctx.local.call('runner.status')).toBeTruthy();

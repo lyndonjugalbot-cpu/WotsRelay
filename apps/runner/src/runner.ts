@@ -17,6 +17,7 @@ import { WorkspaceLeases, canonicalRoot, gitBaseline } from '@wots/workspace';
 import { MockAdapter, SCENARIOS } from '@wots/adapter-mock';
 import { ClaudeCodeAdapter } from '@wots/adapter-claude-code';
 import { CodexAdapter } from '@wots/adapter-codex';
+import { CursorAdapter } from '@wots/adapter-cursor';
 import { redact } from '@wots/security';
 import { RelayController, RelayError } from './sessions/controller.ts';
 import { RpcServer, type Handler } from './server/rpc.ts';
@@ -41,6 +42,7 @@ export function buildAdapters(store: Store, paths: RunnerPaths, env: NodeJS.Proc
   return [
     new ClaudeCodeAdapter({ chatSandboxDir: paths.chatSandbox, env, capture }),
     new CodexAdapter({ chatSandboxDir: paths.chatSandbox, env, capture }),
+    new CursorAdapter({ chatSandboxDir: paths.chatSandbox, env, capture, applyEdits: (projectId) => store.getSetting<boolean>(`cursor.applyEdits:${projectId}`, false) === true }),
     new MockAdapter({ connectionId: 'mock-claude', label: 'Mock Claude', models: ['claude-opus-5-5'], script: (i, n) => scenario().primary(i, n) }),
     new MockAdapter({ connectionId: 'mock-codex', label: 'Mock Codex', models: ['gpt-6-astra'], script: (i, n) => scenario().secondary(i, n) }),
   ];
@@ -169,6 +171,13 @@ export async function startRunner(opts: { home?: string; adapters?: (store: Stor
       const cfg = FallbackConfig.parse(setProviderEnabled(loadFallback(store), params));
       store.setSetting('fallback', cfg);
       return cfg;
+    },
+    // Local socket only (not in MOBILE_METHODS): let Cursor apply edits (--force) in one project.
+    'cursor.setApplyEdits': (p) => {
+      const { projectId, enabled } = z.object({ projectId: z.string(), enabled: z.boolean() }).parse(p);
+      if (!store.getProject(projectId)) throw new RelayError('not_found', 'Unknown project');
+      store.setSetting(`cursor.applyEdits:${projectId}`, enabled);
+      return { enabled };
     },
     'settings.setChatConsent': (p) => {
       const v = z.object({ consent: z.boolean() }).parse(p).consent;

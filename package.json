@@ -24,6 +24,7 @@
     "@types/ws": "8.18.2",
     "@wots/adapter-claude-code": "workspace:*",
     "@wots/adapter-codex": "workspace:*",
+    "@wots/adapter-cursor": "workspace:*",
     "@wots/adapter-mock": "workspace:*",
     "@wots/cli": "workspace:*",
     "@wots/context": "workspace:*",
