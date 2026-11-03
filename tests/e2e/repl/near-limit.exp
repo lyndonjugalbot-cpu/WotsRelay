@@ -1,0 +1,16 @@
+source [file join [file dirname [info script]] common.tcl]
+spawn -noecho $wots --mock $scenario
+step "Enter to choose" trust; send "2"
+prompt first; send "My name is Ada.\r"
+step "Hello from the primary" primary-reply
+step "96% of the 5-hour limit used" usage-note
+prompt second; send "What is my name?\r"
+step "is at 96% of its 5-hour limit" early-switch-warning
+step "to continue\\?" consent; send "\r"
+step "Continuing with gpt-6-astra" switched
+step "Hello from the fallback" fallback-reply
+prompt status; send "/status\r"
+step "Switches to the fallback at 95%" status-usage
+prompt exit; send "/exit\r"
+step "bye" exit
+expect eof

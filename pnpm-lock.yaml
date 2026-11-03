@@ -68,6 +68,9 @@ importers:
       '@wots/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapters/codex
+      '@wots/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@wots/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

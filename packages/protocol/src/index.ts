@@ -108,6 +108,8 @@ export const FallbackConfig = z.object({
   autoFallback: z.boolean(),
   outageFallback: z.boolean(),
   allowApiBilling: z.boolean(),
+  // Prefer the next route once a provider reports this share of a usage window as used.
+  switchAtPercent: z.number().int().min(50).max(100).default(95),
 });
 export type FallbackConfig = z.infer<typeof FallbackConfig>;
 
@@ -156,6 +158,11 @@ export const Attempt = z.object({
   retryCount: z.number().int().nonnegative(),
 });
 export type Attempt = z.infer<typeof Attempt>;
+
+// approve_session: also allow matching requests for the rest of the provider session (Codex
+// `acceptForSession`; offered only when the request says it is supported).
+export const ApprovalDecision = z.enum(['approve', 'approve_session', 'reject']);
+export type ApprovalDecision = z.infer<typeof ApprovalDecision>;
 
 export const RiskCategory = z.enum(['read-only', 'reversible-local-write', 'external-side-effect', 'unknown']);
 export type RiskCategory = z.infer<typeof RiskCategory>;
@@ -287,8 +294,8 @@ export const EventPayloads = {
   'tool.failed': z.object({ operationId: Id, message: z.string() }),
   'tool.unknown': z.object({ operationId: Id, message: z.string() }),
   'tool.denied': z.object({ operationId: Id, message: z.string() }),
-  'approval.requested': z.object({ approvalId: Id, operationId: Id.nullable(), action: z.string(), scope: z.string(), risk: RiskCategory, version: z.number().int() }),
-  'approval.resolved': z.object({ approvalId: Id, decision: z.enum(['approve', 'reject']), deviceId: z.string(), version: z.number().int() }),
+  'approval.requested': z.object({ approvalId: Id, operationId: Id.nullable(), action: z.string(), scope: z.string(), risk: RiskCategory, version: z.number().int(), canApproveForSession: z.boolean().default(false) }),
+  'approval.resolved': z.object({ approvalId: Id, decision: ApprovalDecision, deviceId: z.string(), version: z.number().int() }),
   'limit.observed': z.object({ failure: Failure }),
   'checkpoint.created': z.object({ checkpointId: Id, contentHash: z.string(), changedFiles: z.number().int(), omitted: z.array(z.string()) }),
   'provider.switched': z.object({ from: RouteRef, to: RouteRef, reason: z.string(), simulated: z.boolean() }),
@@ -367,7 +374,7 @@ export const RegisterProjectParams = z.object({
 
 export const ApprovalDecisionParams = z.object({
   approvalId: Id,
-  decision: z.enum(['approve', 'reject']),
+  decision: ApprovalDecision,
   expectedVersion: z.number().int(),
   deviceId: z.string().default('local'),
 });

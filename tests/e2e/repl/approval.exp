@@ -1,0 +1,11 @@
+source [file join [file dirname [info script]] common.tcl]
+spawn -noecho $wots --mock $scenario
+step "Enter to choose" trust; send "\r"
+prompt task; send "Write the approved file.\r"
+step "Approval needed" approval
+step "changes files in this folder" risk-words
+step "Allow this\\?" picker; send "\r"
+step "completed" completion
+prompt exit; send "/exit\r"
+step "bye" exit
+expect eof

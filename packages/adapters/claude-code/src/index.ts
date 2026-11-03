@@ -9,6 +9,7 @@ import {
   execVersion,
   lineReader,
   resolveExecutable,
+  classifyShellCommand,
   spawnManaged,
   type AdapterEventEnvelope,
   type AttemptHandle,
@@ -70,14 +71,13 @@ export function buildArgs(input: Pick<AttemptInput, 'model' | 'effort' | 'permis
 
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite', 'WebSearch', 'WebFetch', 'ToolSearch']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const READONLY_SHELL = /^(ls|pwd|cat|head|tail|wc|rg|grep|find|git (status|diff|log|show|branch|rev-parse))(\s|$)/;
 
 export function classifyToolRisk(name: string, input: unknown): RiskCategory {
   if (READ_TOOLS.has(name)) return 'read-only';
   if (WRITE_TOOLS.has(name)) return 'reversible-local-write';
   if (name === 'Bash') {
-    const cmd = typeof (input as { command?: unknown })?.command === 'string' ? (input as { command: string }).command.trim() : '';
-    return READONLY_SHELL.test(cmd) && !/[;&|><`$]/.test(cmd) ? 'read-only' : 'unknown';
+    const cmd = typeof (input as { command?: unknown })?.command === 'string' ? (input as { command: string }).command : '';
+    return classifyShellCommand(cmd);
   }
   return 'unknown';
 }
@@ -139,6 +139,21 @@ export function translateLine(msg: Record<string, unknown>, st: StreamState, req
       const id = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : null;
       if (id) out.push({ type: 'tool.denied', providerToolId: id, message: 'Denied by Claude Code permission rules (no approval host)' });
       else out.push({ type: 'diagnostic', level: 'warn', message: 'Claude Code denied a tool call under the current permission profile' });
+    }
+    return out;
+  }
+  // Usage per window, as reported by Claude Code (captured 2.1.316: `rate_limit_info.unifiedWindows`,
+  // utilization 0–1 and resetsAt in epoch seconds).
+  if (type === 'rate_limit_event') {
+    const info = msg.rate_limit_info as Record<string, unknown> | undefined;
+    const windows = (info?.unifiedWindows as Record<string, Record<string, unknown>> | undefined) ?? (info && typeof info.rateLimitType === 'string' ? { [info.rateLimitType]: info } : {});
+    for (const [scope, w] of Object.entries(windows)) {
+      if (typeof w.utilization !== 'number') continue;
+      out.push({
+        type: 'usage.observed',
+        observation: { provider: 'anthropic', scope, source: 'claude rate_limit_event', observedAt: new Date().toISOString(), resetAt: typeof w.resetsAt === 'number' ? new Date(w.resetsAt * 1000).toISOString() : null, value: Math.round(w.utilization * 100), unit: 'percent', confidence: 'reported' },
+        providerEventId: uuid ? `${uuid}:${scope}` : undefined,
+      });
     }
     return out;
   }
@@ -280,6 +295,8 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
     // Claude Code has no documented catalog command; list the user's preference as unverified.
     return [
       { modelId: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', supportedEfforts: ['low', 'medium', 'high'], speedOptions: ['standard'], inputModalities: ['text'], contextLimit: null, verification: 'listed-unverified', verifiedAt: null, source: 'wotsrelay preference (code.claude.com/docs/en/model-config)' },
+      { modelId: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', supportedEfforts: ['low', 'medium', 'high'], speedOptions: ['standard'], inputModalities: ['text'], contextLimit: null, verification: 'listed-unverified', verifiedAt: null, source: 'wotsrelay preference (code.claude.com/docs/en/model-config)' },
+      { modelId: 'claude-haiku-5-5', displayName: 'Claude Haiku 5.5', supportedEfforts: ['low', 'medium', 'high'], speedOptions: ['standard'], inputModalities: ['text'], contextLimit: null, verification: 'listed-unverified', verifiedAt: null, source: 'wotsrelay preference (code.claude.com/docs/en/model-config)' },
     ];
   }
 

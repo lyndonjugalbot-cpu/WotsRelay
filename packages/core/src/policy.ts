@@ -76,6 +76,31 @@ export interface RouteCandidate {
   modelAvailable: boolean;
   coolingDownUntil: number | null;
   isMock: boolean;
+  // Latest provider-reported usage per window (e.g. five_hour, seven_day) for this connection.
+  usage?: UsageWindow[];
+}
+
+export interface UsageWindow {
+  scope: string;
+  percent: number;
+  resetAt: number | null;
+}
+
+export const DEFAULT_SWITCH_AT_PERCENT = 95;
+
+// The fullest window still at or over the threshold. A window whose reset time has passed no
+// longer counts, so the preferred route comes back on its own after the reset.
+export function nearLimit(usage: readonly UsageWindow[] | undefined, threshold: number, now: number): UsageWindow | null {
+  let worst: UsageWindow | null = null;
+  for (const w of usage ?? []) {
+    if (w.percent < threshold || (w.resetAt !== null && w.resetAt <= now)) continue;
+    if (!worst || w.percent > worst.percent) worst = w;
+  }
+  return worst;
+}
+
+export function windowLabel(scope: string): string {
+  return ({ five_hour: '5-hour', seven_day: 'weekly' } as Record<string, string>)[scope] ?? scope;
 }
 
 export interface RouteSelectionInput {
@@ -94,12 +119,16 @@ export function routeKey(r: RouteRef): string {
   return `${r.connectionId}:${r.modelId}`;
 }
 
-export type RouteSelection = { route: RouteRef } | { route: null; reasons: string[] };
+export type RouteSelection =
+  | { route: RouteRef; reason?: string; skipped?: { route: RouteRef; window: UsageWindow } }
+  | { route: null; reasons: string[]; reason?: undefined };
 
 // Spec §9 step 6 and the fallback invariants: only configured, authenticated, compatible,
 // consented routes; each attempted at most once per cycle; never an unapproved billing path.
 export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
   const reasons: string[] = [];
+  const threshold = input.config.switchAtPercent ?? DEFAULT_SWITCH_AT_PERCENT;
+  const nearlyFull: Array<{ route: RouteRef; window: UsageWindow }> = [];
   for (const route of input.config.routes) {
     const key = routeKey(route);
     if (input.tried.has(key)) {
@@ -135,7 +164,34 @@ export function selectNextRoute(input: RouteSelectionInput): RouteSelection {
       reasons.push(`${key}: project has not consented to cross-provider context sharing`);
       continue;
     }
+    const full = nearLimit(c.usage, threshold, input.now);
+    if (full) {
+      reasons.push(`${key}: ${full.percent}% of the ${windowLabel(full.scope)} limit used`);
+      nearlyFull.push({ route, window: full });
+      continue;
+    }
+    if (nearlyFull.length) {
+      const first = nearlyFull[0]!;
+      return { route, reason: `${first.route.modelId} is at ${first.window.percent}% of its ${windowLabel(first.window.scope)} limit${resetText(first.window.resetAt)}`, skipped: first };
+    }
     return { route };
   }
+  // Every usable route is close to its limit: keep working on the one with the most room left.
+  if (nearlyFull.length) {
+    const best = [...nearlyFull].sort((a, b) => a.window.percent - b.window.percent)[0]!;
+    return { route: best.route, reason: `All routes are near their limits; using ${best.route.modelId} (${best.window.percent}% used)` };
+  }
   return { route: null, reasons };
+}
+
+// The user's chosen model goes first. Routes on other connections keep their order as the
+// fallback; the chosen connection's previous model is dropped so one provider never falls
+// back to itself by surprise.
+export function promoteRoute(routes: readonly RouteRef[], chosen: RouteRef): RouteRef[] {
+  return [chosen, ...routes.filter((r) => r.connectionId !== chosen.connectionId)];
+}
+
+function resetText(resetAt: number | null): string {
+  if (resetAt === null) return '';
+  return `, resets ${new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }

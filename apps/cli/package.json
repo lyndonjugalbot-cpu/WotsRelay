@@ -12,6 +12,7 @@
     "commander": "15.0.0",
     "@wots/adapter-claude-code": "workspace:*",
     "@wots/adapter-codex": "workspace:*",
-    "@wots/security": "workspace:*"
+    "@wots/security": "workspace:*",
+    "@wots/core": "workspace:*"
   }
 }

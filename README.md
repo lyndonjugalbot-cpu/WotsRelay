@@ -17,9 +17,38 @@ pnpm wots doctor     # versions, sign-in, billing route, runner state
 pnpm wots setup      # consent for chat fallback; starts the runner
 ```
 
-To put `wots` on your PATH: `ln -s "$PWD/apps/cli/bin/wots" ~/.local/bin/wots`.
+To put `wots` on your PATH, run this **from the project folder** (it records the absolute path):
+
+```bash
+mkdir -p ~/.local/bin && ln -sfn "$(pwd)/apps/cli/bin/wots" ~/.local/bin/wots
+```
 
 ## Use
+
+Open a terminal in a project folder and run:
+
+```bash
+wots
+```
+
+It works like `claude` or `codex`: type a request and press Enter. The first time in a folder it asks whether you trust it (edits allowed) or want chat only. **Claude Opus 5.5** is the default model.
+
+| In the session | Does |
+|---|---|
+| `/model` | pick any Claude or Codex model (↑/↓, Enter); the other provider stays as fallback; saved as your default. `/model gpt-6-astra` picks directly |
+| `/new` | new conversation (`/clear` works too) |
+| `/resume` | pick an earlier conversation in this folder |
+| `/status` | model, fallback, folder access, sign-in |
+| `/help`, `/exit` | list commands, quit (also Ctrl-D, or Ctrl-C twice) |
+| Ctrl-C | stop the reply in progress |
+
+**Usage-aware switching:** when a provider reports 95% of a usage window (5-hour or weekly) used, your next message goes to the fallback model with the conversation so far, and it switches back after the window resets. A reply already in progress is never cut off. See it with `/status` or `wots usage`; change it with `wots fallback threshold 90`.
+
+If a reply pauses (for example Claude reaches its limit), a menu offers **Continue with GPT-6 Astra**, retry, or leave it paused. The first time, it asks before sending the conversation to the other provider.
+
+`wots "fix the failing test"` starts the session with that message. Piped input runs once and exits: `echo "summarize README.md" | wots`.
+
+Scripting commands are still available:
 
 ```bash
 wots chat "Explain closures in JavaScript"
@@ -28,6 +57,10 @@ wots sessions
 wots resume <session-id> [--fallback] [--note "the migration finished"]
 wots export <session-id> > session.md
 wots runner status | stop
+wots usage                             # usage per provider and window
+wots fallback threshold 95             # switch point, percent of a window
+wots gateway enable | pair | status     # phone access (see docs/decisions/0004)
+wots devices list | revoke <id>
 ```
 
 Try the handoff without using any quota (clearly labelled as simulated):

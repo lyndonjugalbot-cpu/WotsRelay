@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildArgs, classifyClaudeFailure, classifyToolRisk, newStreamState, translateLine } from '@wots/adapter-claude-code';
-import { classifyCodexError, failureFromTurnError, sandboxFor } from '@wots/adapter-codex';
+import { classifyCodexError, codexApprovalAnswer, failureFromTurnError, sandboxFor } from '@wots/adapter-codex';
 
 describe('Claude Code adapter (documented stream-json)', () => {
   it('builds only documented flags and keeps project hooks/MCP out of -p runs', () => {
@@ -53,11 +53,22 @@ describe('Claude Code adapter (documented stream-json)', () => {
     expect(classifyClaudeFailure(st3, { code: 1, signal: null }, '2.1.316')!.kind).toBe('auth');
   });
 
-  it('treats shell commands as unknown risk unless plainly read-only', () => {
+  it('classifies Bash by what the command can touch; script runners stay unknown', () => {
     expect(classifyToolRisk('Bash', { command: 'git status' })).toBe('read-only');
-    expect(classifyToolRisk('Bash', { command: 'git status; rm -rf x' })).toBe('unknown');
+    expect(classifyToolRisk('Bash', { command: 'git status; rm -rf x' })).toBe('external-side-effect');
     expect(classifyToolRisk('Bash', { command: 'npm run deploy' })).toBe('unknown');
     expect(classifyToolRisk('Read', {})).toBe('read-only');
+  });
+});
+
+describe('Codex approval answers', () => {
+  it('maps decisions to the schema strings; session approval only for commands', () => {
+    expect(codexApprovalAnswer('approve', 'command')).toBe('accept');
+    expect(codexApprovalAnswer('approve_session', 'command')).toBe('acceptForSession');
+    expect(codexApprovalAnswer('approve_session', 'file')).toBe('accept');
+    expect(codexApprovalAnswer('reject', 'command')).toBe('decline');
+    const schema = readFileSync('tests/fixtures/codex-schema/ServerRequest.json', 'utf8');
+    for (const v of ['accept', 'acceptForSession', 'decline']) expect(schema).toContain(`"${v}"`);
   });
 });
 
@@ -82,7 +93,7 @@ describe('Codex adapter (app-server schema 0.166)', () => {
 
   it('every method the adapter calls exists in the pinned schema', () => {
     const raw = ['codex_app_server_protocol.v2.schemas.json', 'ServerRequest.json', 'ServerNotification.json', 'ClientRequest.json'].map((f) => readFileSync(`tests/fixtures/codex-schema/${f}`, 'utf8')).join('\n');
-    for (const m of ['initialize', 'thread/start', 'turn/start', 'turn/interrupt', 'account/read', 'model/list', 'item/agentMessage/delta', 'turn/completed', 'item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'account/rateLimits/updated', 'model/rerouted']) {
+    for (const m of ['initialize', 'thread/start', 'thread/resume', 'turn/start', 'turn/interrupt', 'account/read', 'model/list', 'item/agentMessage/delta', 'turn/completed', 'item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'account/rateLimits/updated', 'model/rerouted']) {
       expect(raw).toContain(`"${m}"`);
     }
   });

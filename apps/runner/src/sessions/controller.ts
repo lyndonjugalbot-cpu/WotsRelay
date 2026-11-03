@@ -1,6 +1,7 @@
 import {
   PAUSED_STATES,
   TERMINAL_STATES,
+  type ApprovalDecision,
   type Attempt,
   type Checkpoint,
   type EventEnvelope,
@@ -27,6 +28,7 @@ import {
   type Clock,
   type ProviderAdapter,
   type RouteCandidate,
+  type UsageWindow,
 } from '@wots/core';
 import type { Store } from '@wots/storage';
 import { buildHandoff, DEFAULT_BUDGET } from '@wots/context';
@@ -43,6 +45,7 @@ export const DEFAULT_FALLBACK: FallbackConfig = {
   autoFallback: true,
   outageFallback: false,
   allowApiBilling: false,
+  switchAtPercent: 95,
 };
 
 export const MOCK_FALLBACK: FallbackConfig = {
@@ -72,11 +75,15 @@ interface ActiveRun {
   done: Promise<void>;
 }
 
+type UsageRecord = { percent: number; resetAt: string | null; observedAt: string };
+
 interface DriveStart {
   route: RouteRef;
   prompt: string;
   tried: Set<string>;
   parentAttemptId: string | null;
+  // Native conversation to continue, valid only on the connection that created it.
+  resume?: { connectionId: string; providerSessionId: string } | null;
 }
 
 export interface ControllerOptions {
@@ -201,7 +208,7 @@ export class RelayController {
     return this.store.getRun(runId)!;
   }
 
-  async decideApproval(input: { approvalId: string; decision: 'approve' | 'reject'; expectedVersion: number; deviceId: string }): Promise<{ applied: boolean; status: string }> {
+  async decideApproval(input: { approvalId: string; decision: ApprovalDecision; expectedVersion: number; deviceId: string }): Promise<{ applied: boolean; status: string }> {
     const approval = this.store.getApproval(input.approvalId);
     if (!approval) throw new RelayError('not_found', 'Unknown approval');
     const run = this.store.getRun(approval.runId)!;
@@ -212,7 +219,7 @@ export class RelayController {
       this.store.resolveApproval(approval.id, 'reject', approval.version, 'system:stale-permission');
       return { applied: false, status: 'stale' };
     }
-    const won = this.store.resolveApproval(approval.id, input.decision, input.expectedVersion, input.deviceId);
+    const won = this.store.resolveApproval(approval.id, input.decision === 'reject' ? 'reject' : 'approve', input.expectedVersion, input.deviceId);
     if (!won) return { applied: false, status: this.store.getApproval(approval.id)!.status };
     this.emit(run.sessionId, run.id, approval.attemptId, 'approval.resolved', { approvalId: approval.id, decision: input.decision, deviceId: input.deviceId, version: input.expectedVersion + 1 });
     const a = this.active.get(run.id);
@@ -220,7 +227,7 @@ export class RelayController {
       if (this.store.getRun(run.id)!.state === 'awaiting_approval' && this.store.pendingApprovals(session.id).length === 0) this.transition(run.id, 'running', null);
       await a.handle.answerApproval(approval.providerRequestId, input.decision);
     }
-    return { applied: true, status: input.decision === 'approve' ? 'approved' : 'rejected' };
+    return { applied: true, status: input.decision === 'reject' ? 'rejected' : 'approved' };
   }
 
   // Resume a paused run. `fallback` continues on the next route (user-confirmed switch).
@@ -352,12 +359,55 @@ export class RelayController {
       return;
     }
     // Return to the primary on a new run: each run starts from the top of the route list.
-    const pick = this.pickRoute(session, project, new Set(), null);
+    // Earlier turns bind the conversation to the provider that answered last.
+    const prior = this.lastAttemptBefore(session.id, runId);
+    const pick = this.pickRoute(session, project, new Set(), prior?.connectionId ?? null);
     if (!pick.route) {
       this.transition(runId, 'paused_auth', `No eligible provider route: ${pick.reasons.join('; ')}`);
       return;
     }
-    this.launch(runId, { route: pick.route, prompt: text, tried: new Set(), parentAttemptId: null }, false);
+    const route = pick.route;
+    // Same provider: continue its own session, so the model keeps the full conversation.
+    if (!prior || (route.connectionId === prior.connectionId && prior.providerSessionId)) {
+      const resume = prior?.providerSessionId ? { connectionId: prior.connectionId, providerSessionId: prior.providerSessionId } : null;
+      this.launch(runId, { route, prompt: text, tried: new Set(), parentAttemptId: null, resume }, false);
+      return;
+    }
+    // Different provider (or no native session to resume): hand the conversation over explicitly.
+    const reason = route.connectionId === prior.connectionId ? 'Continuing the conversation (no native session to resume)' : `Conversation continues on ${route.modelId}`;
+    const cp = this.checkpoint(run, session, project, prior, reason);
+    const handoff = buildHandoff(cp, this.budgetFor(route), `Respond to the user's newest message. You are taking over an ongoing conversation from ${prior.requestedModel}.\n\n${text}`);
+    if (handoff.blockedBy) {
+      this.transition(runId, 'paused_uncertain', `Conversation is too large to hand to ${route.modelId}: ${handoff.blockedBy}`);
+      return;
+    }
+    if (route.connectionId !== prior.connectionId) {
+      this.emit(session.id, runId, null, 'provider.switched', { from: { connectionId: prior.connectionId, modelId: prior.requestedModel }, to: route, reason: pick.reason ?? 'Preferred model for this conversation', simulated: false });
+    }
+    this.launch(runId, { route, prompt: handoff.prompt, tried: new Set(), parentAttemptId: prior.id }, false);
+  }
+
+  // Latest provider-reported usage per window, kept across restarts. Only percentages the
+  // provider itself reported count; nothing is estimated.
+  recordUsage(connectionId: string, o: { scope: string; value: number | null; unit: string | null; resetAt: string | null; observedAt: string; confidence: string }): void {
+    if (o.unit !== 'percent' || o.value === null || o.confidence !== 'reported') return;
+    const all = this.store.getSetting<Record<string, UsageRecord>>(`usage:${connectionId}`, {});
+    all[o.scope] = { percent: o.value, resetAt: o.resetAt, observedAt: o.observedAt };
+    this.store.setSetting(`usage:${connectionId}`, all);
+  }
+
+  usageWindows(connectionId: string): UsageWindow[] {
+    return Object.entries(this.store.getSetting<Record<string, UsageRecord>>(`usage:${connectionId}`, {})).map(([scope, u]) => ({ scope, percent: u.percent, resetAt: u.resetAt ? Date.parse(u.resetAt) : null }));
+  }
+
+  // The most recent provider attempt in this session before the given run.
+  private lastAttemptBefore(sessionId: string, runId: string): Attempt | null {
+    const runs = this.store.runsForSession(sessionId).filter((r) => r.id !== runId);
+    for (let i = runs.length - 1; i >= 0; i--) {
+      const attempts = this.store.attemptsForRun(runs[i]!.id);
+      if (attempts.length) return attempts.at(-1)!;
+    }
+    return null;
   }
 
   private launch(runId: string, start: DriveStart, resumed: boolean): void {
@@ -391,6 +441,7 @@ export class RelayController {
         modelAvailable: !!a && (a.isMock || !status || status.models.length === 0 || status.models.includes(route.modelId)),
         coolingDownUntil: this.cooldowns.get(routeKey(route)) ?? null,
         isMock: a?.isMock ?? false,
+        usage: this.usageWindows(route.connectionId),
       };
     });
   }
@@ -426,6 +477,7 @@ export class RelayController {
     }
     try {
       let { route, prompt, parentAttemptId } = start;
+      let resume = start.resume ?? null;
       const tried = start.tried;
       let throttleRetries = 0;
       let contextRetries = 0;
@@ -464,7 +516,7 @@ export class RelayController {
           effort: session.fallback.effort,
           prompt,
           permissionProfile: project ? project.permissionProfile : 'chat',
-          resumeProviderSessionId: null,
+          resumeProviderSessionId: resume && resume.connectionId === route.connectionId ? resume.providerSessionId : null,
         });
 
         if (active.cancelRequested) return this.cancel(runId);
@@ -490,6 +542,7 @@ export class RelayController {
           contextRetries++;
           const cp = this.checkpoint(this.store.getRun(runId)!, session, project, attempt, 'Context too large');
           prompt = buildHandoff(cp, { ...this.budgetFor(route), fallbackCap: 24_000 }).prompt;
+          resume = null; // a compacted handoff starts a fresh provider session
           parentAttemptId = attempt.id;
           continue;
         }
@@ -684,12 +737,13 @@ export class RelayController {
           resolvedBy: null,
         });
         if (t) this.store.upsertToolAction({ ...t, approvalId });
-        this.emit(sessionId, runId, attempt.id, 'approval.requested', { approvalId, operationId: t?.operationId ?? null, action: redact(e.action), scope: e.scope, risk: e.risk, version: 0 });
+        this.emit(sessionId, runId, attempt.id, 'approval.requested', { approvalId, operationId: t?.operationId ?? null, action: redact(e.action), scope: e.scope, risk: e.risk, version: 0, canApproveForSession: e.canApproveForSession ?? false });
         if (this.store.getRun(runId)!.state === 'running') this.transition(runId, 'awaiting_approval', redact(e.action));
         return;
       }
       case 'usage.observed':
         this.emit(sessionId, runId, attempt.id, 'usage.observed', { observation: { ...e.observation, connectionId: attempt.connectionId } });
+        this.recordUsage(attempt.connectionId, e.observation);
         return;
       case 'limit.observed':
         this.emit(sessionId, runId, attempt.id, 'limit.observed', { failure: e.failure });

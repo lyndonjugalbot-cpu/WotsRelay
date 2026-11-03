@@ -22,7 +22,7 @@ function replayExecutable(fixture: string): string {
 async function replay(
   make: (exe: string, sandbox: string) => ProviderAdapter,
   fixture: string,
-  opts: { model: string; code?: boolean; interruptOnDelta?: boolean; approval?: 'approve' | 'reject' },
+  opts: { model: string; code?: boolean; interruptOnDelta?: boolean; approval?: 'approve' | 'reject'; resume?: string },
 ): Promise<{ events: AdapterEventEnvelope[]; outcome: AttemptOutcome }> {
   const adapter = make(replayExecutable(fixture), tempDir('wsb-'));
   await adapter.probe();
@@ -33,7 +33,7 @@ async function replay(
     effort: 'medium',
     prompt: 'replayed prompt',
     permissionProfile: opts.code ? 'edit' : 'chat',
-    resumeProviderSessionId: null,
+    resumeProviderSessionId: opts.resume ?? null,
   });
   const events: AdapterEventEnvelope[] = [];
   let interrupted = false;
@@ -63,6 +63,11 @@ describe('captured Claude Code 2.1.316 streams', () => {
     expect(of(events, 'session.bound')).toHaveLength(1);
     expect(of(events, 'model.effective')[0]).toMatchObject({ model: 'claude-opus-5-5' });
     expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['pong']);
+    // Real reading at capture time: the 5-hour window was 99% used.
+    expect(of(events, 'usage.observed').map((e) => [e.observation.scope, e.observation.value])).toEqual([
+      ['five_hour', 99],
+      ['seven_day', 14],
+    ]);
     noProblems(events);
   });
 
@@ -86,13 +91,29 @@ describe('captured Claude Code 2.1.316 streams', () => {
   });
 });
 
+describe('captured second turns (conversation memory, live 2026-11-01)', () => {
+  it('Claude: --resume continues the same session and remembers the first turn', async () => {
+    const { events, outcome } = await replay(claude, 'claude-code-2.1.316/chat-resume.jsonl', { model: 'claude-opus-5-5', resume: '00000000-0000-4000-8000-000000000001' });
+    expect(outcome.termination).toBe('completed');
+    expect(of(events, 'session.bound')[0]!.providerSessionId).toBe('00000000-0000-4000-8000-000000000001');
+    expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['heron']);
+  });
+
+  it('Codex: thread/resume (not thread/start) continues the same thread', async () => {
+    const { events, outcome } = await replay(codex, 'codex-0.166.0/chat-resume.jsonl', { model: 'gpt-6-astra', resume: '00000000-0000-4000-8000-000000000001' });
+    expect(outcome.termination).toBe('completed');
+    expect(of(events, 'session.bound')[0]!.providerSessionId).toBe('00000000-0000-4000-8000-000000000001');
+    expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['falcon']);
+  });
+});
+
 describe('captured Codex 0.166.0 app-server streams', () => {
   it('chat success, with rate-limit observations', async () => {
     const { events, outcome } = await replay(codex, 'codex-0.166.0/chat-success.jsonl', { model: 'gpt-6-astra' });
     expect(outcome).toMatchObject({ termination: 'completed', failure: null });
     expect(of(events, 'model.effective')[0]).toMatchObject({ model: 'gpt-6-astra', effort: 'medium' });
     expect(of(events, 'message.completed').map((e) => e.text)).toEqual(['pong']);
-    expect(of(events, 'usage.observed').length).toBeGreaterThan(0);
+    expect([...new Set(of(events, 'usage.observed').map((e) => e.observation.scope))].sort()).toEqual(['five_hour', 'seven_day']);
     noProblems(events);
   });
 
@@ -117,7 +138,8 @@ describe('captured Codex 0.166.0 app-server streams', () => {
     expect(outcome.termination).toBe('completed');
     const req = of(events, 'approval.requested');
     expect(req).toHaveLength(1);
-    expect(req[0]!.action).toContain('curl');
+    expect(req[0]!.action).toMatch(/^Run: curl /);
+    expect(req[0]).toMatchObject({ risk: 'external-side-effect', canApproveForSession: true });
     expect(of(events, 'tool.denied').length).toBeGreaterThan(0);
   });
 });

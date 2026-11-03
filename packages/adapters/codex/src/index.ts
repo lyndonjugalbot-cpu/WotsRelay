@@ -7,7 +7,9 @@ import {
   execVersion,
   lineReader,
   resolveExecutable,
+  classifyShellCommand,
   spawnManaged,
+  unwrapShell,
   type AdapterEventEnvelope,
   type AttemptHandle,
   type AttemptInput,
@@ -17,7 +19,7 @@ import {
   type ProbeResult,
   type ProviderAdapter,
 } from '@wots/core';
-import type { Connection, Failure, FailureKind, ModelCapability, PermissionProfile } from '@wots/protocol';
+import type { ApprovalDecision, Connection, Failure, FailureKind, ModelCapability, PermissionProfile } from '@wots/protocol';
 import { detectBillingEnv, redact } from '@wots/security';
 
 export const ADAPTER_VERSION = '0.1.0';
@@ -65,6 +67,19 @@ export function classifyCodexError(info: unknown): { kind: FailureKind; evidence
 export function failureFromTurnError(err: Json | null | undefined): Failure {
   const { kind, evidence } = classifyCodexError(err?.codexErrorInfo);
   return { kind, evidence, message: redact(String(err?.message ?? 'Codex turn failed')).slice(0, 500), retryAfterMs: null, resetAt: null, scope: null, simulated: false };
+}
+
+// Decision strings from the pinned schema; acceptForSession exists only for commands.
+export function codexApprovalAnswer(decision: ApprovalDecision, kind: 'command' | 'file'): 'accept' | 'acceptForSession' | 'decline' {
+  if (decision === 'reject') return 'decline';
+  return decision === 'approve_session' && kind === 'command' ? 'acceptForSession' : 'accept';
+}
+
+// Same window names as Claude so usage reads the same for both providers.
+export function codexWindowScope(mins: unknown, fallback: string): string {
+  if (mins === 300) return 'five_hour';
+  if (mins === 10080) return 'seven_day';
+  return typeof mins === 'number' ? `${mins}_min` : fallback;
 }
 
 export function sandboxFor(profile: PermissionProfile): 'read-only' | 'workspace-write' {
@@ -289,7 +304,7 @@ export class CodexAdapter implements ProviderAdapter {
           const id = String(item?.id);
           if (item?.type === 'agentMessage' && method === 'item/completed') channel.push({ type: 'message.completed', messageKey: id, text: String(item.text ?? '') });
           if (item?.type === 'commandExecution') {
-            if (method === 'item/started') channel.push({ type: 'tool.started', providerToolId: id, name: 'Shell', args: { command: item.command }, risk: 'unknown', paths: [] });
+            if (method === 'item/started') channel.push({ type: 'tool.started', providerToolId: id, name: 'Shell', args: { command: item.command }, risk: classifyShellCommand(String(item.command ?? '')), paths: [] });
             else if (item.status === 'completed' && (item.exitCode === 0 || item.exitCode === null)) channel.push({ type: 'tool.completed', providerToolId: id, result: typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput.slice(0, 2000) : undefined });
             else if (item.status === 'declined') channel.push({ type: 'tool.denied', providerToolId: id, message: 'Declined' });
             else channel.push({ type: 'tool.failed', providerToolId: id, message: `exit ${String(item.exitCode)} (${String(item.status)})` });
@@ -307,12 +322,14 @@ export class CodexAdapter implements ProviderAdapter {
           channel.push({ type: 'model.effective', model: String(p.toModel), effort: null, note: `Codex rerouted from ${String(p.fromModel)} (${String(p.reason)})` });
           break;
         case 'account/rateLimits/updated': {
+          // Both windows (captured 0.166.0: primary 300 min, secondary 10080 min).
           const rl = p.rateLimits as Json;
-          const primary = rl?.primary as Json | null;
-          if (primary && typeof primary.usedPercent === 'number') {
+          for (const key of ['primary', 'secondary'] as const) {
+            const w = rl?.[key] as Json | null;
+            if (!w || typeof w.usedPercent !== 'number') continue;
             channel.push({
               type: 'usage.observed',
-              observation: { provider: 'openai', scope: String(rl.limitId ?? 'primary'), source: 'codex account/rateLimits/updated', observedAt: new Date().toISOString(), resetAt: typeof primary.resetsAt === 'number' ? new Date(primary.resetsAt * 1000).toISOString() : null, value: primary.usedPercent, unit: 'percent', confidence: 'reported' },
+              observation: { provider: 'openai', scope: codexWindowScope(w.windowDurationMins, key), source: 'codex account/rateLimits/updated', observedAt: new Date().toISOString(), resetAt: typeof w.resetsAt === 'number' ? new Date(w.resetsAt * 1000).toISOString() : null, value: w.usedPercent, unit: 'percent', confidence: 'reported' },
             });
           }
           break;
@@ -338,8 +355,10 @@ export class CodexAdapter implements ProviderAdapter {
         const reqId = `${method}:${String(id)}`;
         const isCmd = method.includes('commandExecution');
         pendingApprovals.set(reqId, { rpcId: id, kind: isCmd ? 'command' : 'file' });
-        const action = isCmd ? `Run: ${String(p.command ?? '(command)')}` : `Apply file changes${p.reason ? ` — ${String(p.reason)}` : ''}`;
-        channel.push({ type: 'approval.requested', providerRequestId: reqId, providerToolId: typeof p.itemId === 'string' ? p.itemId : null, action: redact(action), scope: String(p.cwd ?? cwd), risk: isCmd ? 'unknown' : 'reversible-local-write' });
+        const command = isCmd ? unwrapShell(String(p.command ?? '')) : '';
+        const action = isCmd ? `Run: ${command || '(command)'}` : `Apply file changes${p.reason ? ` — ${String(p.reason)}` : ''}`;
+        // Only command approvals define acceptForSession in the pinned 0.166 schema.
+        channel.push({ type: 'approval.requested', providerRequestId: reqId, providerToolId: typeof p.itemId === 'string' ? p.itemId : null, action: redact(action), scope: String(p.cwd ?? cwd), risk: isCmd ? classifyShellCommand(command) : 'reversible-local-write', canApproveForSession: isCmd });
         return;
       }
       // Never answer token refreshes or unknown requests with fabricated data.
@@ -352,13 +371,12 @@ export class CodexAdapter implements ProviderAdapter {
       try {
         await rpc.request('initialize', { clientInfo: CLIENT_INFO }, 30_000);
         rpc.notify('initialized');
-        const thread = await rpc.request<{ thread: { id: string }; model: string; reasoningEffort: string | null }>('thread/start', {
-          cwd,
-          model: input.model,
-          approvalPolicy: input.permissionProfile === 'edit' ? 'on-request' : 'untrusted',
-          sandbox: sandboxFor(input.permissionProfile),
-          ephemeral: false,
-        });
+        const threadOpts = { cwd, model: input.model, approvalPolicy: input.permissionProfile === 'edit' ? 'on-request' : 'untrusted', sandbox: sandboxFor(input.permissionProfile) };
+        // Same thread for later turns of a conversation (schema 0.166: thread/resume takes the
+        // thread/start options plus threadId).
+        const thread = input.resumeProviderSessionId
+          ? await rpc.request<{ thread: { id: string }; model: string; reasoningEffort: string | null }>('thread/resume', { threadId: input.resumeProviderSessionId, ...threadOpts })
+          : await rpc.request<{ thread: { id: string }; model: string; reasoningEffort: string | null }>('thread/start', { ...threadOpts, ephemeral: false });
         threadId = thread.thread.id;
         channel.push({ type: 'session.bound', providerSessionId: threadId });
         channel.push({ type: 'model.effective', model: thread.model, effort: thread.reasoningEffort, note: thread.model !== input.model ? 'Codex started the thread on a different model' : undefined });
@@ -396,7 +414,7 @@ export class CodexAdapter implements ProviderAdapter {
         const p = pendingApprovals.get(providerRequestId);
         if (!p) return;
         pendingApprovals.delete(providerRequestId);
-        rpc.respond(p.rpcId, { decision: decision === 'approve' ? 'accept' : 'decline' });
+        rpc.respond(p.rpcId, { decision: codexApprovalAnswer(decision, p.kind) });
       },
     };
   }

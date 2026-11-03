@@ -8,6 +8,7 @@ import type {
   Provider,
   RiskCategory,
   UsageObservation,
+  ApprovalDecision,
 } from '@wots/protocol';
 
 // Normalized events an adapter emits. The runner assigns WotsRelay IDs/sequence numbers.
@@ -20,7 +21,7 @@ export type AdapterEvent =
   | { type: 'tool.completed'; providerToolId: string; result?: string }
   | { type: 'tool.failed'; providerToolId: string; message: string }
   | { type: 'tool.denied'; providerToolId: string; message: string }
-  | { type: 'approval.requested'; providerRequestId: string; providerToolId: string | null; action: string; scope: string; risk: RiskCategory }
+  | { type: 'approval.requested'; providerRequestId: string; providerToolId: string | null; action: string; scope: string; risk: RiskCategory; canApproveForSession?: boolean }
   | { type: 'usage.observed'; observation: Omit<UsageObservation, 'connectionId'> }
   | { type: 'limit.observed'; failure: Failure }
   // Provider-side event id used for deduplication of late/duplicate deliveries.
@@ -52,7 +53,7 @@ export interface AttemptOutcome {
 export interface AttemptHandle {
   events: AsyncIterable<AdapterEventEnvelope>;
   interrupt(reason: string): Promise<void>;
-  answerApproval(providerRequestId: string, decision: 'approve' | 'reject'): Promise<void>;
+  answerApproval(providerRequestId: string, decision: ApprovalDecision): Promise<void>;
   // Resolves after the event stream is drained and process-group exit is observed.
   done: Promise<AttemptOutcome>;
   // Process-group id of the provider process, recorded so a restarted runner can stop it.

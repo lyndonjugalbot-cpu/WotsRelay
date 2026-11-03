@@ -32,6 +32,7 @@ export const MOBILE_METHODS: ReadonlySet<string> = new Set([
   'events.subscribe',
   'events.unsubscribe',
   'fallback.get',
+  'usage.get',
   'export',
 ]);
 

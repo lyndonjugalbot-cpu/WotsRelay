@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
-import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { Command, Option } from 'commander';
-import { ExitCodes, PAUSED_STATES, TERMINAL_STATES, type EventEnvelope, type EventPayload, type RunState, type Session } from '@wots/protocol';
+import { ExitCodes, type Session } from '@wots/protocol';
 import { ensureRunner, lanAddress, readRunnerPid, runnerPaths, RpcError, RunnerUnavailableError, type RunnerClient } from '@wots/runner';
 import { ClaudeCodeAdapter } from '@wots/adapter-claude-code';
 import { CodexAdapter } from '@wots/adapter-codex';
 import { detectBillingEnv } from '@wots/security';
+import { exitFor, followRun, sendAndFollow } from './follow.ts';
+import { interactive, oneShot } from './interactive.ts';
+import { amber, bold, dim, green, red } from './ui.ts';
 
-const tty = process.stdout.isTTY;
-const c = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
-const dim = c('2');
-const bold = c('1');
-const amber = c('33');
-const red = c('31');
-const green = c('32');
-const cyan = c('36');
-
-const program = new Command().name('wots').description('WotsRelay — one workspace across Claude Code and Codex').version('0.1.0').option('--json', 'machine-readable JSON output');
+const program = new Command()
+  .name('wots')
+  .description('WotsRelay — one workspace across Claude Code and Codex.\nRun `wots` with no command for an interactive session in the current folder.')
+  .version('0.1.0')
+  .option('--json', 'machine-readable JSON output')
+  // Program options must come before a subcommand, so `wots code --mock …` keeps its own --mock.
+  .enablePositionalOptions()
+  .argument('[prompt...]', 'optional first message for the interactive session')
+  .addOption(new Option('--mock <scenario>', 'use deterministic mock providers (clearly labelled)').hideHelp())
+  .action(async (words: string[], opts: { mock?: string }) => {
+    const text = words.join(' ');
+    if (process.stdin.isTTY && process.stdout.isTTY) return interactive({ prompt: text || undefined, mock: opts.mock });
+    const piped = text || (await readStdin());
+    if (!piped) program.help();
+    process.exitCode = await oneShot(piped, { mock: opts.mock });
+  });
 const json = () => program.opts<{ json?: boolean }>().json === true;
 
 async function client(start = true): Promise<RunnerClient> {
@@ -37,139 +45,7 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8').trim();
 }
 
-// ---- streaming a run -----------------------------------------------------------------------
-
-function label(p: { connectionId: string | null; model: string | null }): string {
-  return `${p.connectionId ?? 'assistant'} · ${p.model ?? '?'}`;
-}
-
-async function followRun(cl: RunnerClient, sessionId: string, runId: string, after: number): Promise<RunState> {
-  let lastSeq = after;
-  let speaker: string | null = null;
-  let finalState: RunState | null = null;
-  let resolveDone: (s: RunState) => void = () => {};
-  const done = new Promise<RunState>((r) => (resolveDone = r));
-  const rl = process.stdin.isTTY ? createInterface({ input: process.stdin, output: process.stderr }) : null;
-
-  const handle = async (e: EventEnvelope) => {
-    if (e.seq <= lastSeq) return; // dedupe replay/live overlap
-    lastSeq = e.seq;
-    if (e.runId !== runId && e.type !== 'user.message') return;
-    if (json()) {
-      process.stdout.write(`${JSON.stringify(e)}\n`);
-    }
-    switch (e.type) {
-      case 'attempt.started': {
-        const p = e.payload as EventPayload<'attempt.started'>;
-        if (!json()) process.stderr.write(dim(`\n▸ ${p.connectionId} · ${p.model}${p.isMock ? amber(' [MOCK]') : ''}\n`));
-        break;
-      }
-      case 'message.delta': {
-        const p = e.payload as EventPayload<'message.delta'>;
-        if (json()) break;
-        const who = label(p);
-        if (speaker !== who) {
-          process.stdout.write(`\n${cyan(bold(who))}\n`);
-          speaker = who;
-        }
-        process.stdout.write(p.text);
-        break;
-      }
-      case 'message.completed':
-        if (!json()) process.stdout.write('\n');
-        speaker = null;
-        break;
-      case 'message.interrupted':
-        if (!json()) process.stdout.write(amber('\n[interrupted]\n'));
-        speaker = null;
-        break;
-      case 'tool.started': {
-        const p = e.payload as EventPayload<'tool.started'>;
-        if (!json()) process.stderr.write(dim(`  ⚙ ${p.name} ${p.argsPreview} (${p.risk})\n`));
-        break;
-      }
-      case 'tool.denied':
-      case 'tool.unknown':
-      case 'tool.failed':
-        if (!json()) process.stderr.write(amber(`  ! ${e.type.split('.')[1]}: ${(e.payload as { message: string }).message}\n`));
-        break;
-      case 'model.effective': {
-        const p = e.payload as EventPayload<'model.effective'>;
-        if (!json() && p.effective !== p.requested) process.stderr.write(amber(`  ! effective model ${p.effective} (requested ${p.requested})${p.note ? ` — ${p.note}` : ''}\n`));
-        break;
-      }
-      case 'provider.switched': {
-        const p = e.payload as EventPayload<'provider.switched'>;
-        if (!json()) process.stderr.write(bold(amber(`\n⇄ ${p.reason}. Continuing with ${p.to.modelId} on ${p.to.connectionId}${p.simulated ? ' (simulated limit)' : ''}.\n`)));
-        break;
-      }
-      case 'approval.requested': {
-        const p = e.payload as EventPayload<'approval.requested'>;
-        if (json()) break;
-        process.stderr.write(bold(`\n? Approval needed (${p.risk}): ${p.action}\n  scope: ${p.scope}\n`));
-        if (rl) {
-          const ans = (await rl.question('  Approve? [y/N] ')).trim().toLowerCase();
-          const res = await cl.call<{ applied: boolean; status: string }>('approvals.decide', { approvalId: p.approvalId, decision: ans === 'y' || ans === 'yes' ? 'approve' : 'reject', expectedVersion: p.version, deviceId: 'cli' });
-          if (!res.applied) process.stderr.write(dim(`  (already ${res.status} elsewhere)\n`));
-        } else process.stderr.write(`  Decide with: wots approve ${p.approvalId} --version ${p.version}  (or wots reject …)\n`);
-        break;
-      }
-      case 'run.stateChanged': {
-        const p = e.payload as EventPayload<'run.stateChanged'>;
-        if (TERMINAL_STATES.has(p.to) || PAUSED_STATES.has(p.to)) {
-          finalState = p.to;
-          if (!json()) {
-            const msg = p.to === 'completed' ? green('✓ completed') : p.to === 'cancelled' ? amber('■ cancelled') : PAUSED_STATES.has(p.to) ? amber(`❚❚ ${p.to.replace('_', ' ')}`) : red('✗ failed');
-            process.stderr.write(`\n${msg}${p.reason ? dim(` — ${p.reason}`) : ''}\n`);
-            if (PAUSED_STATES.has(p.to)) process.stderr.write(dim(`  Resume: wots resume ${sessionId}   ·   Continue on next provider: wots resume ${sessionId} --fallback\n`));
-          }
-          resolveDone(p.to);
-        }
-        break;
-      }
-      case 'diagnostic': {
-        const p = e.payload as EventPayload<'diagnostic'>;
-        if (!json() && p.level !== 'info') process.stderr.write(dim(`  ${p.level}: ${p.message}\n`));
-        break;
-      }
-    }
-  };
-
-  let queue = Promise.resolve();
-  cl.onEvent((e) => {
-    if (e.sessionId === sessionId) queue = queue.then(() => handle(e));
-  });
-  cl.onClose(() => resolveDone(finalState ?? ('paused_uncertain' as RunState)));
-  const { replay } = await cl.call<{ replay: EventEnvelope[] }>('events.subscribe', { sessionId, after });
-  for (const e of replay) queue = queue.then(() => handle(e));
-
-  let sigints = 0;
-  process.on('SIGINT', () => {
-    sigints++;
-    if (sigints > 1) process.exit(ExitCodes.cancelled);
-    process.stderr.write(amber('\nStopping run… (Ctrl-C again to detach; the run is then stopped by the runner)\n'));
-    void cl.call('runs.interrupt', { runId });
-  });
-
-  const state = await done;
-  await queue;
-  rl?.close();
-  return state;
-}
-
-function exitFor(state: RunState): number {
-  if (state === 'completed') return ExitCodes.completed;
-  if (state === 'cancelled') return ExitCodes.cancelled;
-  if (PAUSED_STATES.has(state)) return ExitCodes.paused;
-  return ExitCodes.failed;
-}
-
-async function sendAndFollow(cl: RunnerClient, session: Session, text: string): Promise<number> {
-  const before = (await cl.call<{ session: Session }>('sessions.get', { sessionId: session.id })).session.latestSeq;
-  const { runId } = await cl.call<{ runId: string }>('messages.send', { sessionId: session.id, text, idempotencyKey: randomUUID() });
-  if (!json()) process.stderr.write(dim(`session ${session.id} · run ${runId}\n`));
-  return exitFor(await followRun(cl, session.id, runId, before));
-}
+const followOpts = () => ({ json: json(), sigint: 'cli' as const, resumeHints: true, showIds: true });
 
 // ---- commands ------------------------------------------------------------------------------
 
@@ -239,14 +115,14 @@ program
     const cl = await client();
     const session = await cl.call<Session>('sessions.create', { projectId: null, mode: opts.mock ? 'mock' : 'real', mockScenario: opts.mock });
     let text = words.join(' ') || (await readStdin());
-    if (text) process.exitCode = await sendAndFollow(cl, session, text);
+    if (text) process.exitCode = exitFor(await sendAndFollow(cl, session, text, followOpts()));
     else {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       for (;;) {
         text = (await rl.question(bold('\nyou › '))).trim();
         if (!text || text === '/exit') break;
         rl.pause();
-        process.exitCode = await sendAndFollow(cl, session, text);
+        process.exitCode = exitFor(await sendAndFollow(cl, session, text, followOpts()));
         rl.resume();
       }
       rl.close();
@@ -278,7 +154,7 @@ program
     if (!json() && git.dirtyPaths.length) process.stderr.write(amber(`Note: ${git.dirtyPaths.length} uncommitted change(s) exist. They will be preserved, not reset or stashed.\n`));
     if (!json() && !project.crossProviderConsent) process.stderr.write(dim('Cross-provider fallback is off for this project (add --consent to allow it).\n'));
     const session = await cl.call<Session>('sessions.create', { projectId: project.id, mode: opts.mock ? 'mock' : 'real', mockScenario: opts.mock });
-    process.exitCode = await sendAndFollow(cl, session, text);
+    process.exitCode = exitFor(await sendAndFollow(cl, session, text, followOpts()));
     cl.close();
   });
 
@@ -304,7 +180,7 @@ program
     const cl = await client();
     const before = (await cl.call<{ session: Session }>('sessions.get', { sessionId })).session.latestSeq;
     const { runId } = await cl.call<{ runId: string }>('runs.resume', { sessionId, fallback: !!opts.fallback, note: opts.note });
-    process.exitCode = exitFor(await followRun(cl, sessionId, runId, before));
+    process.exitCode = exitFor(await followRun(cl, sessionId, runId, before, followOpts()));
     cl.close();
   });
 
@@ -314,9 +190,10 @@ for (const [name, decision] of [['approve', 'approve'], ['reject', 'reject']] as
     .description(`${name[0]!.toUpperCase()}${name.slice(1)} a pending action`)
     .argument('<approval-id>')
     .requiredOption('--version <n>', 'expected approval version', (v) => parseInt(v, 10))
-    .action(async (approvalId: string, opts: { version: number }) => {
+    .option('--session', 'approve, and let similar requests run without asking for the rest of the session (Codex commands)')
+    .action(async (approvalId: string, opts: { version: number; session?: boolean }) => {
       const cl = await client(false);
-      const res = await cl.call('approvals.decide', { approvalId, decision, expectedVersion: opts.version, deviceId: 'cli' });
+      const res = await cl.call('approvals.decide', { approvalId, decision: decision === 'approve' && opts.session ? 'approve_session' : decision, expectedVersion: opts.version, deviceId: 'cli' });
       cl.close();
       print(res, () => console.log(res));
     });
@@ -374,6 +251,36 @@ fallback
     const res = await cl.call('fallback.set', { ...cur.real, routes: models.map((m) => ({ connectionId: conn(m), modelId: m })) });
     cl.close();
     print(res, () => console.log(green('Fallback order saved.')));
+  });
+
+fallback
+  .command('threshold')
+  .argument('<percent>', 'switch to the next model once a provider reports this share of a usage window as used (50–100; 100 = only on a real limit)', (v) => parseInt(v, 10))
+  .action(async (percent: number) => {
+    const cl = await client();
+    const cur = await cl.call<{ real: Record<string, unknown> }>('fallback.get');
+    const res = await cl.call('fallback.set', { ...cur.real, switchAtPercent: percent });
+    cl.close();
+    print(res, () => console.log(green(`New conversations switch at ${percent}% of a usage window.`)));
+  });
+
+program
+  .command('usage')
+  .description('Usage reported by Claude Code and Codex, per window')
+  .action(async () => {
+    const cl = await client();
+    const u = await cl.call<{ switchAtPercent: number; connections: Record<string, Array<{ scope: string; percent: number; resetAt: string | null }>> }>('usage.get');
+    cl.close();
+    print(u, () => {
+      for (const [conn, windows] of Object.entries(u.connections)) {
+        if (conn.startsWith('mock')) continue;
+        const live = windows.filter((w) => !w.resetAt || Date.parse(w.resetAt) > Date.now());
+        console.log(bold(conn));
+        if (!live.length) console.log(dim('  not reported yet (it appears after the next request)'));
+        for (const w of live) console.log(`  ${w.scope.padEnd(10)} ${String(w.percent).padStart(3)}%${w.resetAt ? dim(`  resets ${new Date(w.resetAt).toLocaleString()}`) : ''}${w.percent >= u.switchAtPercent ? amber('  → switching') : ''}`);
+      }
+      console.log(dim(`Switches to the next model at ${u.switchAtPercent}% (change with: wots fallback threshold <percent>).`));
+    });
   });
 
 program
